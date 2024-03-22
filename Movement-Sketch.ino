@@ -224,7 +224,7 @@ void loop()
 {
   int packetSize = Udp.parsePacket();
   if (packetSize) {                               // if you get a client,
-     Serial.print("Received packet of size ");
+    Serial.print("Received packet of size ");
     Serial.println(packetSize);
     int len = Udp.read(packetBuffer, 255);
     if (len > 0) {
@@ -234,20 +234,19 @@ void loop()
       switch (c)    //serial control instructions
       {  
         case 'A':go_advance(SPEED);;break;
-        case 'L':left_turn(TURN_SPEED);break;
-        case 'R':right_turn(TURN_SPEED);break;
+        case 'L':right_turn(TURN_SPEED);break; // Changed to move to the right
+        case 'R':left_turn(TURN_SPEED);break;  // Changed to move to the left
         case 'B':go_back(SPEED);break;
         case 'E':stop_Stop();break;
-        case 'F':left_shift(0,150,0,150);break; //left ahead
-        case 'H':right_shift(180,0,150,0);break; //right ahead
-        case 'I':left_shift(150,0,150,0); break;//left back
-        case 'K':right_shift(0,130,0,130); break;//right back
-        case 'O':left_shift(200,150,150,200); break;//left shift
-        case 'T':right_shift(200,200,200,200); break;//left shift
+        case 'F':right_shift(180,0,150,0);break; // Changed to right ahead, was left ahead
+        case 'H':left_shift(0,150,0,150);break;  // Changed to left ahead, was right ahead
+        case 'I':right_shift(0,130,0,130); break;// Changed to right back, was left back
+        case 'K':left_shift(150,0,150,0); break; // Changed to left back, was right back
+        case 'O':right_shift(200,200,200,200); break; // Adjusted for right shift, was left shift
+        case 'T':left_shift(200,150,150,200); break; // Adjusted for left shift, was right shift
         default:break;
       }
-    }
-    
+  } 
 }
 
 
@@ -270,4 +269,6 @@ void printWifiStatus()
   Serial.println(ip);
   Serial.println();
 }
+
+
 
