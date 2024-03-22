@@ -4,9 +4,9 @@
 
 Commands to move in the OYOSOO App: 
 
-Pause - Stop 
-Top arrow - move forward 
-Botton arrow - move backwards 
+Pause - Stop /n
+Top arrow - move forward /n 
+Botton arrow - move backwards /n
 Left arrow - move left 
 Right arrow - move right 
 
