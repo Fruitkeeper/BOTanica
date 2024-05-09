@@ -1,0 +1,29 @@
+import Jetson.GPIO as GPIO
+import time
+import serial
+
+# Using BCM pin number 5 (refer to Broadcom GPIO pinout for your Jetson)
+sensor_pin = 18
+GPIO.setmode(GPIO.BOARD)  # 
+
+# Set the pin as an input
+GPIO.setup(sensor_pin, GPIO.IN)
+
+# Open a serial connection to the Arduino
+arduino = serial.Serial('/dev/ttyACM0', 9600)
+
+
+try:
+    while True:
+        # Read the input value from the sensor pin
+        moisture_level = GPIO.input(sensor_pin)
+        if moisture_level == GPIO.LOW:  # Assuming LOW means moisture detected
+            print("No moisture detected, sending S")
+            arduino.write(b'S')  # Send signal to stop
+        else:
+            print("Moisture detected, sending F")
+            arduino.write(b'F')  # Send signal to move
+        time.sleep(1)
+finally:
+    GPIO.cleanup()  # Reset GPIO settings before exiting
+    arduino.close()
