@@ -66,12 +66,13 @@ This repository contains a ROS-based implementation of a light-seeking robot. Th
 ### 1. Prerequisites
 Ensure the following dependencies are installed:
 - ROS (Melodic/Noetic)
-- Python 3.x
+- Python3
 - `rospy`
 - `gattlib` for BLE communication
 
 Install Python dependencies:
 ```bash
 pip install -r requirements.txt
+
 
 
