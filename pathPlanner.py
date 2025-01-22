@@ -163,6 +163,22 @@ class LightPathPlanner:
         rospy.loginfo(f"Max light at {max_angle}° with intensity {max_light} lux.")
         return max_angle
 
+    def should_stop(self):
+        """Determine if the robot should stop based on light intensity distribution."""
+        lux_values = [max(lux_1, lux_2) for lux_1, lux_2 in self.light_values.values()]
+        max_lux = max(lux_values)
+        min_lux = min(lux_values)
+
+        # High percentage of angles with lux > 600
+        high_light_angles = [lux for lux in lux_values if lux > 600]
+        high_light_percentage = len(high_light_angles) / len(self.light_values)
+
+        # Check conditions
+        if high_light_percentage > 0.7 and (max_lux - min_lux) < 50:
+            rospy.loginfo("Bright, uniform area found. Stopping movement.")
+            return True
+        return False
+
     def move_forward(self, distance):
         """Move the robot forward by a specific distance."""
         rospy.loginfo(f"Moving forward {distance} meters.")
@@ -187,12 +203,20 @@ class LightPathPlanner:
         rospy.loginfo("Starting light-based path planning.")
         while not rospy.is_shutdown():
             self.scan_environment()
+
+            # Stop if the conditions for bright area are met
+            if self.should_stop():
+                rospy.loginfo("Robot has found an optimal bright spot. Stopping.")
+                break
+
+            # Find the brightest angle and move toward it
             target_angle = self.find_max_light_direction()
             if target_angle is not None:
                 self.rotate_to_angle(target_angle)
                 rospy.loginfo(f"Aligning to brightest angle {target_angle}°.")
                 self.move_forward(0.5)  # Move forward by 0.5 meters
-            rospy.sleep(5)
+
+            rospy.sleep(5)  # Pause before repeating
 
 if __name__ == "__main__":
     try:
