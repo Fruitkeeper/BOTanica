@@ -1,135 +1,198 @@
-#!/usr/bin/env python
-
 import rospy
 from std_msgs.msg import Bool
 from geometry_msgs.msg import Twist
 from sensor_info_publisher.msg import SensorData
-import time
+from nav_msgs.msg import Odometry
+from tf.transformations import euler_from_quaternion
+import math
 
 class LightPathPlanner:
     def __init__(self):
-        # Initialize ROS node
         rospy.init_node('light_path_planner', anonymous=True)
 
-        # Subscribe to consolidated sensor data
+        # Publishers and subscribers
         rospy.Subscriber('sensor_data1', SensorData, self.sensor_data_callback)
-
-        # Publisher for robot movement
+        rospy.Subscriber('/odom', Odometry, self.odometry_callback)
         self.cmd_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
-        # Publisher for triggering infosensor
-        self.trigger_pub = rospy.Publisher('turn_and_ping', Bool, queue_size=10)
+        self.turn_pub = rospy.Publisher('turn_and_ping', Bool, queue_size=10)
 
-        # Variables to store sensor data and current angle
+        # Variables for sensor data, angles, and odometry
         self.sensor_data = None
-        self.light_values = []
+        self.light_values = {i: [0, 0] for i in range(0, 360, 45)}
         self.current_angle = 0
-        self.angles = [i * 45 for i in range(8)]  # 0°, 45°, ..., 315°
-
-        # Flags to indicate new data availability
+        self.target_angle = 0
         self.new_data_received = False
+        self.turn_completed = False
+        self.kp = 1.0  # Proportional control gain
+        self.tolerance = 0.02  # Radians tolerance
+        self.min_angular_speed = 0.05
+        self.max_angular_speed = 1.0
+
+        # Ensure robot starts at angle 0
+        self.align_to_zero()
 
     def sensor_data_callback(self, msg):
         """Callback to process sensor data."""
         self.sensor_data = msg
-        self.new_data_received = True  # Indicate that new data is available
+        self.new_data_received = True
 
-    def rotate_robot(self, angle):
-        """Rotate the robot by a specified angle."""
-        twist = Twist()
-        twist.angular.z = 0.5  # Set angular velocity
-        duration = abs(angle) / 45 * 2  # Approximate time to rotate 45° is 2 seconds
-        rospy.loginfo(f"Rotating {angle} degrees.")
-        start_time = rospy.Time.now()
+    def odometry_callback(self, msg):
+        """Callback to track odometry and determine when the turn is complete."""
+        orientation_q = msg.pose.pose.orientation
+        orientation_list = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
+        (roll, pitch, yaw) = euler_from_quaternion(orientation_list)
+        self.current_angle = yaw  # Update the current yaw angle
+
+    @staticmethod
+    def normalize_angle(angle):
+        """Normalize angle to [-pi, pi]."""
+        while angle > math.pi:
+            angle -= 2 * math.pi
+        while angle < -math.pi:
+            angle += 2 * math.pi
+        return angle
+
+    def rotate_to_angle(self, angle):
+        """Rotate the robot to a specific angle using tuned proportional control."""
+        self.target_angle = math.radians(angle)  # Convert target angle to radians
+        self.turn_completed = False
+        rospy.loginfo(f"Rotating to {angle} degrees.")
+
         rate = rospy.Rate(10)
-        while (rospy.Time.now() - start_time).to_sec() < duration and not rospy.is_shutdown():
-            self.cmd_pub.publish(twist)
+        command = Twist()
+
+        while not rospy.is_shutdown():
+            # Calculate angular error
+            angular_error = self.normalize_angle(self.target_angle - self.current_angle)
+
+            # Check if the robot is aligned
+            if abs(angular_error) < self.tolerance:
+                self.turn_completed = True
+                break
+
+            # Proportional control
+            angular_speed = max(min(self.kp * angular_error, self.max_angular_speed), -self.max_angular_speed)
+
+            # Ensure minimum speed is met
+            if 0 < abs(angular_speed) < self.min_angular_speed:
+                angular_speed = self.min_angular_speed if angular_speed > 0 else -self.min_angular_speed
+
+            # Command the robot
+            command.angular.z = angular_speed
+            self.cmd_pub.publish(command)
             rate.sleep()
 
-        # Stop the robot after rotation
-        twist.angular.z = 0
-        self.cmd_pub.publish(twist)
+        # Stop the robot after completing the turn
+        command.angular.z = 0
+        self.cmd_pub.publish(command)
 
-    def move_forward(self, duration):
-        """Move the robot forward for a given duration."""
-        twist = Twist()
-        twist.linear.x = 0.5  # Set linear velocity
-        rospy.loginfo("Moving forward.")
-        start_time = rospy.Time.now()
-        rate = rospy.Rate(10)
-        while (rospy.Time.now() - start_time).to_sec() < duration and not rospy.is_shutdown():
-            self.cmd_pub.publish(twist)
-            rate.sleep()
+        if self.turn_completed:
+            rospy.loginfo(f"Rotation to {angle} degrees completed.")
+        else:
+            rospy.logwarn("Rotation timed out or failed.")
 
-        # Stop the robot after moving
-        twist.linear.x = 0
-        self.cmd_pub.publish(twist)
+        rospy.sleep(0.5)  # Brief pause before the next action
 
-    def scan_environment(self):
-        """Perform a 360° scan to find the direction of strongest light."""
-        self.light_values = []
+    def align_to_zero(self):
+        """Align the robot to angle 0 before starting."""
+        rospy.loginfo("Aligning to angle 0 before starting.")
+        self.rotate_to_angle(0)
 
-        for angle in self.angles:
-            # Rotate the robot to the next angle
-            self.rotate_robot(45)
+    def ping_sensor(self):
+        """Ping the sensor three times and return the average lux values."""
+        # Ensure robot is stationary
+        command = Twist()
+        command.linear.x = 0
+        command.angular.z = 0
+        self.cmd_pub.publish(command)
 
-            # Trigger infosensor to read data
-            rospy.loginfo(f"Requesting sensor data for angle {self.current_angle}°.")
-            self.trigger_pub.publish(True)
+        lux_1 = []
+        lux_2 = []
+        for i in range(3):
+            self.new_data_received = False
+            self.turn_pub.publish(True)  # Trigger the sensor ping
+            rospy.loginfo(f"Pinging sensors (attempt {i + 1}/3).")
 
-            # Wait for sensor data to be received
-            timeout = 10  # seconds
+            # Wait for sensor data
+            timeout = 15  # Increase timeout to 15 seconds
             while not self.new_data_received and timeout > 0 and not rospy.is_shutdown():
                 rospy.sleep(0.1)
                 timeout -= 0.1
 
-            if self.new_data_received and self.sensor_data is not None:
-                rospy.loginfo(f"Received sensor data at angle {self.current_angle}: Light {self.sensor_data.light_intensity_1} lux")
-                # Use the light intensity from the first sensor (or modify as needed)
-                self.light_values.append((self.current_angle, self.sensor_data.light_intensity_1))
-                self.new_data_received = False  # Reset the flag
+            if self.new_data_received and self.sensor_data:
+                lux_1.append(self.sensor_data.light_intensity_1)
+                lux_2.append(self.sensor_data.light_intensity_2)
             else:
-                rospy.logwarn(f"No sensor data received at angle {self.current_angle}. Assuming 0 lux.")
-                self.light_values.append((self.current_angle, 0))
+                rospy.logwarn("No sensor data received. Retrying...")
 
-            self.current_angle = (self.current_angle + 45) % 360  # Update angle
+            rospy.sleep(2)  # Wait for 2 seconds between pings
+
+        # Calculate averages
+        avg_lux_1 = sum(lux_1) / len(lux_1) if lux_1 else 0
+        avg_lux_2 = sum(lux_2) / len(lux_2) if lux_2 else 0
+        rospy.loginfo(f"Avg Lux - Sensor 1: {avg_lux_1}, Sensor 2: {avg_lux_2}")
+        return avg_lux_1, avg_lux_2
+
+    def scan_environment(self):
+        """Perform a 360° scan and collect averaged light data."""
+        for angle in range(0, 360, 45):
+            self.rotate_to_angle(angle)
+
+            if not self.turn_completed:
+                rospy.logwarn(f"Skipping ping at angle {angle}° due to incomplete turn.")
+                continue
+
+            # Ensure the robot is stationary
+            rospy.sleep(1)  # Add a brief stabilization delay
+
+            avg_lux_1, avg_lux_2 = self.ping_sensor()
+
+            self.light_values[angle] = [avg_lux_1, avg_lux_2]
+            rospy.loginfo(f"Angle {angle}°: Avg Sensor 1 = {avg_lux_1}, Avg Sensor 2 = {avg_lux_2}.")
 
     def find_max_light_direction(self):
-        """Find the angle with the strongest light."""
-        if not self.light_values:
-            rospy.logwarn("No light values recorded during scan.")
-            return None
-        max_angle, max_lux = max(self.light_values, key=lambda x: x[1])
-        rospy.loginfo(f"Max light intensity {max_lux} lux at angle {max_angle}°.")
+        """Find the angle with the maximum light intensity."""
+        max_angle = None
+        max_light = 0
+        for angle, (lux_1, lux_2) in self.light_values.items():
+            max_lux = max(lux_1, lux_2)
+            if max_lux > max_light:
+                max_light = max_lux
+                max_angle = angle
+
+        rospy.loginfo(f"Max light at {max_angle}° with intensity {max_light} lux.")
         return max_angle
 
-    def align_to_angle(self, target_angle):
-        """Align the robot to the specified angle."""
-        rotation_angle = (target_angle - self.current_angle) % 360
-        if rotation_angle > 180:
-            rotation_angle -= 360  # Rotate in the shortest direction
-        self.rotate_robot(rotation_angle)
-        self.current_angle = target_angle
+    def move_forward(self, distance):
+        """Move the robot forward by a specific distance."""
+        rospy.loginfo(f"Moving forward {distance} meters.")
+        command = Twist()
+        command.linear.x = 0.2  # Forward speed (adjust as needed)
+
+        rate = rospy.Rate(10)
+        start_time = rospy.Time.now()
+        duration = distance / command.linear.x  # Time to move the specified distance
+
+        while not rospy.is_shutdown() and (rospy.Time.now() - start_time).to_sec() < duration:
+            self.cmd_pub.publish(command)
+            rate.sleep()
+
+        # Stop the robot
+        command.linear.x = 0
+        self.cmd_pub.publish(command)
+        rospy.loginfo("Movement complete.")
 
     def execute(self):
         """Main execution loop."""
         rospy.loginfo("Starting light-based path planning.")
-        rate = rospy.Rate(1)  # Run at 1 Hz
         while not rospy.is_shutdown():
-            # Perform a 360° scan
             self.scan_environment()
-
-            # Find the direction of strongest light
             target_angle = self.find_max_light_direction()
             if target_angle is not None:
-                # Align to the target angle and move forward
-                self.align_to_angle(target_angle)
-                self.move_forward(5)  # Move forward for 5 seconds
-            else:
-                rospy.logwarn("No valid light direction found. Retrying...")
-
-            # Wait before the next scan
+                self.rotate_to_angle(target_angle)
+                rospy.loginfo(f"Aligning to brightest angle {target_angle}°.")
+                self.move_forward(0.5)  # Move forward by 0.5 meters
             rospy.sleep(5)
-
 
 if __name__ == "__main__":
     try:
@@ -137,4 +200,10 @@ if __name__ == "__main__":
         planner.execute()
     except rospy.ROSInterruptException:
         rospy.loginfo("Path planner node terminated.")
+    finally:
+        twist = Twist()
+        twist.linear.x = 0
+        twist.angular.z = 0
+        planner.cmd_pub.publish(twist)
+        rospy.loginfo("Robot stopped.")
 
