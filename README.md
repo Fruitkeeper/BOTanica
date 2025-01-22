@@ -81,7 +81,7 @@ Clone the repository into your Catkin workspace and build:
 
 ```bash
 cd ~/catkin_ws/src
-git clone git@github.com:your-username/ros-light-seeking-robot.git
+git clone git@github.com:Fruitkeeper/Herbi.git
 cd ~/catkin_ws
 catkin_make
 ```
