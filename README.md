@@ -6,7 +6,7 @@ This repository contains a ROS-based implementation of a light-seeking robot. Th
 
 ## **Repository Structure**
 📦 ros-light-seeking-robot 
-┣ 📂 robomaster 
+┣ 📂 robomaster \n
 ┃ ┣ 📂 src 
 ┃ ┃ ┗ 📜 robomaster_driver.py # Main driver for robot-specific operations 
 ┃ ┣ 📂 launch
