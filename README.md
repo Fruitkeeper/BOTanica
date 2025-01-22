@@ -40,4 +40,38 @@ This repository contains a ROS-based implementation of a light-seeking robot. Th
 ┣ 📜 requirements.txt               # Python dependencies
 ┗ 📜 package.xml                    # ROS package metadata
 
+```
+
+# **Features**
+
+### Sensor Data Handling
+- Communicates with BLE sensors to collect:
+  - Light intensity
+  - Temperature
+  - Soil moisture
+  - Fertility data
+- Publishes consolidated sensor data to ROS topics for real-time processing.
+
+### Path Planning
+- Uses sensor data to identify the brightest direction in a 360° scan.
+- Navigates toward the brightest spot using proportional control for smooth movement.
+
+### Drift Correction
+- Actively corrects drift to maintain accuracy during stationary periods.
+
+---
+
+# **Getting Started**
+
+### 1. Prerequisites
+Ensure the following dependencies are installed:
+- ROS (Melodic/Noetic)
+- Python 3.x
+- `rospy`
+- `gattlib` for BLE communication
+
+Install Python dependencies:
+```bash
+pip install -r requirements.txt
+
 
