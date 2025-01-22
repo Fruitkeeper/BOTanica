@@ -75,7 +75,7 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
-## **2. Build the Workspace**
+### **2. Build the Workspace**
 
 Clone the repository into your Catkin workspace and build:
 
@@ -85,7 +85,7 @@ git clone git@github.com:your-username/ros-light-seeking-robot.git
 cd ~/catkin_ws
 catkin_make
 ```
-## **3. Run the System**
+### **3. Run the System**
 
 Use the main launch file to initialize all packages:
 
