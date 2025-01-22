@@ -92,5 +92,14 @@ Use the main launch file to initialize all packages:
 ```bash
 roslaunch launch/main.launch
 ```
+## **Usage**
+
+### **Sensors**
+Publish sensor data using the `infoRosSensor.py` node:
+
+```bash
+rosrun sensor_info infoRosSensor.py
+```
+
 
 
