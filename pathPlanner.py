@@ -23,7 +23,7 @@ class LightPathPlanner:
         self.target_angle = 0
         self.new_data_received = False
         self.turn_completed = False
-        self.kp = 1.0  # Proportional control gain
+        self.kp = 0.8  # Adjusted Proportional control gain
         self.tolerance = 0.02  # Radians tolerance
         self.min_angular_speed = 0.05
         self.max_angular_speed = 1.0
@@ -75,7 +75,7 @@ class LightPathPlanner:
 
             # Ensure minimum speed is met
             if 0 < abs(angular_speed) < self.min_angular_speed:
-                angular_speed = self.min_angular_speed if angular_speed > 0 else -self.min_angular_speed
+                angular_speed = 0  # Stop minor drift corrections
 
             # Command the robot
             command.angular.z = angular_speed
@@ -97,6 +97,13 @@ class LightPathPlanner:
         """Align the robot to angle 0 before starting."""
         rospy.loginfo("Aligning to angle 0 before starting.")
         self.rotate_to_angle(0)
+
+    def correct_drift(self):
+        """Correct minor drift when stationary."""
+        drift_threshold = 0.01  # Threshold for drift in radians
+        if abs(self.current_angle) > drift_threshold:
+            rospy.loginfo(f"Drift detected: {self.current_angle:.2f} radians. Correcting...")
+            self.rotate_to_angle(0)
 
     def ping_sensor(self):
         """Ping the sensor three times and return the average lux values."""
@@ -216,6 +223,9 @@ class LightPathPlanner:
                 rospy.loginfo(f"Aligning to brightest angle {target_angle}°.")
                 self.move_forward(0.5)  # Move forward by 0.5 meters
 
+            # Correct drift periodically
+            self.correct_drift()
+
             rospy.sleep(5)  # Pause before repeating
 
 if __name__ == "__main__":
@@ -230,4 +240,5 @@ if __name__ == "__main__":
         twist.angular.z = 0
         planner.cmd_pub.publish(twist)
         rospy.loginfo("Robot stopped.")
+
 
