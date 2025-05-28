@@ -1,0 +1,8 @@
+prefix=/home/luis/catkin_ws/devel
+
+Name: light_planner_pkg
+Description: Description of light_planner_pkg
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
