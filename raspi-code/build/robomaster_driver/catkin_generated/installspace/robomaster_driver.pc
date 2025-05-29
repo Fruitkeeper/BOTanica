@@ -1,0 +1,8 @@
+prefix=/home/luis/catkin_ws/install
+
+Name: robomaster_driver
+Description: Description of robomaster_driver
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: catkin_simple rospy pyquaternion geometry_msgs sensor_msgs nav_msgs cv_bridge robomaster_description joy teleop_twist_joy

@@ -1,0 +1,2 @@
+catkin_simple:robomaster_driver:robomaster_ros/robomaster_description
+-DCATKIN_DEVEL_PREFIX=/home/luis/catkin_ws/devel -DCMAKE_INSTALL_PREFIX=/home/luis/catkin_ws/install -G Unix Makefiles
