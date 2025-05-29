@@ -1,5 +1,5 @@
 # **BOTanica**  
-*Autonomous light-seeking robot using ROS and BLE sensors.*
+An autonomous plant-inspired cyborg integrates ROS, BLE sensors, a RealSense camera, and DJI hardware, with blockchain ensuring traceable and decentralized control of its actions.
 
 ---
 
