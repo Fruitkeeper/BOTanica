@@ -1,0 +1,16 @@
+  <launch>
+      <!-- BLE Sensor Publisher -->
+      <node 
+          name="sensor_publisher" 
+          pkg="sensor_publisher" 
+          type="sensorInfo.py" 
+          output="screen"
+      />
+
+      <!-- RealSense Camera -->
+      <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+          <arg name="enable_color" value="true" />
+          <arg name="enable_depth" value="false" />
+      </include>
+  </launch>
+  
