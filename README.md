@@ -1,105 +1,83 @@
-# **BOTanica**
-
-This repository contains a ROS-based implementation of a light-seeking robot. The robot scans its environment using BLE sensors to detect light intensity, determines the brightest direction, and navigates toward it. The project is modular, separating concerns into packages for robot control, sensor data handling, and path planning.
+# **BOTanica**  
+*Autonomous light-seeking robot using ROS and BLE sensors.*
 
 ---
 
-## **Repository Structure**
-
+## **Repository Structure**  
 ```plaintext
-📦 ros-light-seeking-robot
-┣ 📂 robomaster
-┃ ┣ 📂 src
-┃ ┃ ┗ 📜 robomaster_driver.py       # Main driver for robot-specific operations
-┃ ┣ 📂 launch
-┃ ┃ ┗ 📜 robomaster.launch          # Launch file for initializing the robomaster package
-┃ ┗ 📂 config
-┃   ┗ 📜 robomaster_config.yaml     # Configuration for robot hardware and control
-┣ 📂 sensor_info
-┃ ┣ 📂 src
-┃ ┃ ┣ 📜 infoRosSensor.py           # Queries BLE sensors and publishes light intensity data
-┃ ┃ ┗ 📜 calibration.py             # Placeholder for sensor calibration scripts
-┃ ┗ 📂 config
-┃   ┗ 📜 sensor_config.yaml         # Configuration for sensor thresholds and parameters
-┣ 📂 path_planning
-┃ ┣ 📂 src
-┃ ┃ ┣ 📜 pathPlanner.py             # Implements light-based path planning
-┃ ┃ ┗ 📜 utils.py                   # Utility functions for path planning
-┃ ┗ 📂 tests
-┃   ┗ 📜 test_path_planner.py       # Unit tests for path planning logic
-┣ 📂 launch
-┃ ┗ 📜 main.launch                  # Main launch file to initialize all packages
-┣ 📂 config
-┃ ┗ 📜 global_config.yaml           # Shared configuration across packages
-┣ 📂 docs
-┃ ┗ 📜 README.md                    # Project documentation
-┣ 📂 tests
-┃ ┗ 📜 test_full_system.py          # Integration tests for the full system
-┣ 📜 LICENSE                        # License for the repository
-┣ 📜 .gitignore                     # Specifies files and directories to ignore in Git
-┣ 📜 requirements.txt               # Python dependencies
-┗ 📜 package.xml                    # ROS package metadata
-
+📦 BOTanica
+┣ 📂 jetson/                    # Jetson Nano/Xavier components
+┃ ┣ 📂 sensor_publisher/        # BLE sensor data publisher (ROS Melodic)
+┃ ┃ ┣ 📂 scripts/               # ROS nodes (e.g., sensorInfo.py)
+┃ ┃ ┣ 📂 msg/                   # Custom message definitions
+┃ ┃ ┗ 📂 launch/                # Launch files for sensor system
+┃ ┗ 📂 light_follower/          # Light path planning package
+┃   ┗ 📂 scripts/               # Path planning nodes (e.g., LP.py)
+┣ 📂 raspi-code/                # Raspberry Pi components (ROS Noetic)
+┃ ┣ 📂 src/                     # Driver and control nodes
+┃ ┗ 📂 launch/                  # Launch files for robot control
+┣ 📜 sensorInfo.py              # Legacy sensor script
+┣ 📜 light-to-movement.py       # Movement control logic
+┗ 📜 README.md                  # Project documentation
 ```
-
-# **Features**
-
-### Sensor Data Handling
-- Communicates with BLE sensors to collect:
-  - Light intensity
-  - Temperature
-  - Soil moisture
-  - Fertility data
-- Publishes consolidated sensor data to ROS topics for real-time processing.
-
-### Path Planning
-- Uses sensor data to identify the brightest direction in a 360° scan.
-- Navigates toward the brightest spot using proportional control for smooth movement.
-
-### Drift Correction
-- Actively corrects drift to maintain accuracy during stationary periods.
 
 ---
 
-# **Getting Started**
+## **System Architecture**  
+**BOTanica** operates on a **distributed ROS architecture**:  
+- **Raspberry Pi** (ROS Noetic): Runs `roscore` and robot drivers  
+- **Jetson** (ROS Melodic): Handles sensor data and AI processing  
 
-### 1. Prerequisites
-Ensure the following dependencies are installed:
-- ROS (Noetic)
-- Python3
-- `rospy`
-- `gattlib` for BLE communication
+---
 
-Install Python dependencies:
+## **Key Features**  
+- **Distributed Computing**:  
+  - Pi manages motor control and system coordination  
+  - Jetson handles sensor fusion and path planning  
+- **Real-time Sensor Data**:  
+  - BLE sensors publish light, temperature, and soil metrics  
+- **Adaptive Navigation**:  
+  - AI-driven light-seeking behavior with camera integration  
+
+---
+
+## **Quick Start**  
+
+### **1. Raspberry Pi Setup**  
 ```bash
-pip install -r requirements.txt
+# Start ROS core
+roscore
+
+# Run robot driver
+rosrun your_driver_package driver_node.py
 ```
 
-### **2. Build the Workspace**
-
-Clone the repository into your Catkin workspace and build:
-
+### **2. Jetson Setup**  
 ```bash
-cd ~/catkin_ws/src
-git clone git@github.com:Fruitkeeper/Herbi.git
-cd ~/catkin_ws
-catkin_make
-```
-### **3. Run the System**
+# Set ROS master to Pi's IP
+export ROS_MASTER_URI=http://<PI_IP>:11311
 
-Use the main launch file to initialize all packages:
+# Launch sensor publisher
+roslaunch sensor_publisher sensor_system.launch
 
-```bash
-roslaunch launch/main.launch
-```
-## **Usage**
-
-### **Sensors**
-Publish sensor data using the `infoRosSensor.py` node:
-
-```bash
-rosrun sensor_info infoRosSensor.py
+# Run light path planner
+rosrun light_follower LP.py
 ```
 
+---
 
+## **Usage**  
+### **Monitor Sensor Data**:  
+```bash
+rostopic echo /sensor_data
+```
 
+### **View Camera Feed**:  
+```bash
+rostopic echo /camera/color/image_raw
+```
+
+---
+
+## **License**  
+Apache 2.0. See [LICENSE](LICENSE).
