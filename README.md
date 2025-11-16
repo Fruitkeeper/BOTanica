@@ -1,40 +1,83 @@
-# Herbie: The Autonomous Plant
+# **BOTanica**  
+*An autonomous plant-inspired cyborg integrates ROS, BLE sensors, a RealSense camera, and DJI hardware, with blockchain ensuring traceable and decentralized control of its actions.*
 
-Herbie is an autonomous plant system designed to sustain itself for long periods, potentially even for its entire life. Herbie is equipped with several sensors and is mounted on a platform capable of omnidirectional movement.
+---   
 
-## Components
+## **Repository Structure**  
+```plaintext
+📦 BOTanica
+┣ 📂 jetson/                    # Jetson Nano/Xavier components (ROS Melodic)
+┃ ┣ 📂 sensor_publisher/        # BLE sensor data publisher 
+┃ ┃ ┣ 📂 scripts/               # ROS nodes (e.g., sensorInfo.py)
+┃ ┃ ┣ 📂 msg/                   # Custom message definitions
+┃ ┃ ┗ 📂 launch/                # Launch files for sensor system
+┃ ┗ 📂 light_follower/          # Light path planning package
+┃   ┗ 📂 scripts/               # Path planning nodes (e.g., LP.py)
+┣ 📂 raspi-code/                # Raspberry Pi components (ROS Noetic)
+┃ ┣ 📂 src/                     # Driver and control nodes
+┃ ┗ 📂 launch/                  # Launch files for robot control
+┣ 📜 sensorInfo.py              # Legacy sensor script
+┣ 📜 light-to-movement.py       # Movement control logic
+┗ 📜 README.md                  # Project documentation
+```
 
-### Arduino Code
+---
 
-The Arduino board is connected to the motors and wheels, making it responsible for Herbie's movement. The basic commands for controlling the Arduino board to move in various directions are provided in the code. Additionally, there is an option for connecting the Arduino board directly to a Wi-Fi network, allowing control via the OYOSHO app.
+## **System Architecture**  
+**BOTanica** operates on a **distributed ROS architecture**:  
+- **Raspberry Pi** (ROS Noetic): Runs `roscore` and robot drivers  
+- **Jetson** (ROS Melodic): Handles sensor data and AI processing  
 
-#### Arduino Wi-Fi Setup
+---
 
-1. **Network Configuration**: Enter your network SSID and password in the designated section of the Arduino code.
-2. **Run the Code**: Upload the code to the Arduino board. Once connected to the network, the IP address will be displayed.
-3. **OYOSHO App Control**: Open the OYOSHO app and enter the IP address to control the Arduino board.
+## **Key Features**  
+- **Distributed Computing**:  
+  - Pi manages motor control and system coordination  
+  - Jetson handles sensor fusion and path planning  
+- **Real-time Sensor Data**:  
+  - BLE sensors publish light, temperature, and soil metrics  
+- **Adaptive Navigation**:  
+  - AI-driven light-seeking behavior with camera integration  
 
-#### OYOSHO App Commands
+---
 
-- **Pause**: Stop
-- **Top Arrow**: Move forward
-- **Bottom Arrow**: Move backwards
-- **Left Arrow**: Move left
-- **Right Arrow**: Move right
-- **Obstacle**: Move sideways to the right
-- **Tracking**: Move sideways to the left
-- **F1**: Move forward diagonally from left to right
-- **F6**: Move backward diagonally from left to right
-- **F3**: Move forward diagonally from right to left
-- **F4**: Move backward diagonally from right to left
+## **Quick Start**  
 
-### light-to-movement.py
+### **1. Raspberry Pi Setup**  
+```bash
+# Start ROS core
+roscore
 
-This Python script is designed to fetch data from the Xiaomi MiFlora sensor using Bluetooth. It collects information on moisture, fertility, temperature, and light intensity. When the sensor detects light levels below 140 lux, the script sends a signal to the Arduino to move Herbie to a location with better light.
+# Run robot driver
+roslaunch robomaster_driver robomaster_driver.launch
+```
 
-#### Script Functionality
+### **2. Jetson Setup**  
+```bash
+# Set ROS master to Pi's IP
+export ROS_MASTER_URI=http://<PI_IP>:11311
 
-1. **Initialize Serial Communication**: Set up communication between the Raspberry Pi and Arduino.
-2. **Read Sensor Data**: Implement a function to read data from the light sensor.
-3. **Control Movement**: Based on the sensor data, send commands to the Arduino to control Herbie's movement.
-4. **Handle Reconnection**: Ensure the script can handle disconnections and attempt to reconnect.
+# Launch sensor publisher
+roslaunch sensor_publisher sensor_system.launch
+
+# Run light path planner
+rosrun light_follower LP.py
+```
+
+---
+
+## **Usage**  
+### **Monitor Sensor Data**:  
+```bash
+rostopic echo /sensor_data
+```
+
+### **View Camera Feed**:  
+```bash
+rostopic echo /camera/color/image_raw
+```
+
+---
+
+## **License**  
+Apache 2.0. See [LICENSE](LICENSE).
