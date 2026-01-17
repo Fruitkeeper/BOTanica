@@ -2,7 +2,7 @@
 import rospy
 from robomaster import robot
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Image, Imu, JointState
+from sensor_msgs.msg import Image, Imu, JointState, BatteryState
 from nav_msgs.msg import Odometry
 from threading import Thread
 from cv_bridge import CvBridge
@@ -34,6 +34,7 @@ class RoboMasterDriver:
         self._odom_pub = rospy.Publisher("odom", Odometry, queue_size=3)
         self._imu_pub = rospy.Publisher("imu/data", Imu, queue_size=3)
         self._joint_pub = rospy.Publisher("joint_states", JointState, queue_size=3)
+        self._battery_pub = rospy.Publisher("battery", BatteryState, queue_size=3)
         
         # Subscribers
         self._cmd_vel_sub = rospy.Subscriber("cmd_vel", Twist, self._cmd_vel_callback, queue_size=3)
@@ -43,6 +44,7 @@ class RoboMasterDriver:
         self._robot.chassis.sub_attitude(freq=50, callback=self._attitude_callback)
         self._robot.chassis.sub_imu(freq=50, callback=self._imu_callback)
         self._robot.gimbal.sub_angle(freq=50, callback=self._gimbal_angle_callback)
+        self._robot.battery.sub_battery_info(freq=1, callback=self._battery_callback)
         
         rospy.loginfo("RoboMaster driver initialization completed")
 
@@ -187,6 +189,16 @@ class RoboMasterDriver:
         msg.name = ["gimbal_yaw_joint", "gimbal_pitch_joint"]
         msg.position = [yaw/180.0*np.pi, pitch/180.0*np.pi]  # Convert to radians
         self._joint_pub.publish(msg)
+
+    def _battery_callback(self, data):
+        """Battery info handler from RoboMaster"""
+        percent = data
+        msg = BatteryState()
+        msg.header.stamp = rospy.Time.now()
+        msg.header.frame_id = "base_link"
+        msg.percentage = float(percent) / 100.0  # BatteryState uses 0.0-1.0
+        msg.present = True
+        self._battery_pub.publish(msg)
 
     def shutdown(self):
         """Clean shutdown"""
