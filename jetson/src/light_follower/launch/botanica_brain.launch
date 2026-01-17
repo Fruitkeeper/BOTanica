@@ -8,6 +8,9 @@ Launches the complete autonomy stack on Jetson:
 4. cmd_vel multiplexer
 5. BOTanica Brain (main state machine)
 
+Voice commands are handled by the MCP server (started separately by Claude Code).
+Configure MCP in .mcp.json - see voice_mcp/launch/voice_mcp.launch for details.
+
 Prerequisites:
 - ROS Master running on server
 - ROS_MASTER_URI set to server IP

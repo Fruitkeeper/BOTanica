@@ -1,0 +1,38 @@
+<!--
+BOTanica Voice Control Launch File
+
+Launches the voice listener node that:
+1. Listens to microphone
+2. Transcribes with OpenAI Whisper API
+3. Publishes commands to /voice_command
+
+Prerequisites:
+- USB microphone connected to Jetson
+- OPENAI_API_KEY environment variable set
+- sounddevice and openai Python packages installed
+
+Usage:
+  export OPENAI_API_KEY='your-key-here'
+  roslaunch voice_mcp voice_mcp.launch
+
+Modes:
+  - push_to_talk: Call /voice_listener/listen service to start recording
+  - continuous: Always listening with voice activity detection
+-->
+<launch>
+    <!-- Arguments -->
+    <arg name="mode" default="push_to_talk" doc="Listening mode: 'push_to_talk' or 'continuous'"/>
+    <arg name="sample_rate" default="16000" doc="Audio sample rate in Hz"/>
+    <arg name="max_record_duration" default="10.0" doc="Maximum recording duration in seconds"/>
+    <arg name="silence_threshold" default="0.01" doc="RMS threshold for voice activity detection"/>
+    <arg name="silence_duration" default="1.5" doc="Seconds of silence to stop recording"/>
+
+    <!-- Voice Listener Node -->
+    <node pkg="voice_mcp" type="voice_listener_node.py" name="voice_listener" output="screen">
+        <param name="mode" value="$(arg mode)"/>
+        <param name="sample_rate" value="$(arg sample_rate)"/>
+        <param name="max_record_duration" value="$(arg max_record_duration)"/>
+        <param name="silence_threshold" value="$(arg silence_threshold)"/>
+        <param name="silence_duration" value="$(arg silence_duration)"/>
+    </node>
+</launch>

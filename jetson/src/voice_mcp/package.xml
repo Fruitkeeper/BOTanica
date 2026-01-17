@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>voice_mcp</name>
+  <version>1.0.0</version>
+  <description>Voice control for BOTanica robot using OpenAI Whisper API</description>
+  <maintainer email="user@example.com">User</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>std_srvs</build_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+
+  <export></export>
+</package>

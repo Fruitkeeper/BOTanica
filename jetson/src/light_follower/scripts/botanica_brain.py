@@ -21,7 +21,7 @@ from enum import Enum
 from sensor_msgs.msg import Image, BatteryState
 from geometry_msgs.msg import Twist, PoseStamped, Point32
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from cv_bridge import CvBridge
 from tf.transformations import euler_from_quaternion
 
@@ -127,6 +127,11 @@ class BOTanicaBrain:
         # Dosing state
         self.dose_start_time = None
 
+        # Voice command / force override state
+        self.force_override_active = False
+        self.force_override_until = None  # Timestamp when force override expires
+        self.FORCE_OVERRIDE_DURATION = 30.0  # Force override lasts 30 seconds
+
         # === PUBLISHERS ===
         # Direct cmd_vel for light-seeking (scan/align/move)
         self.cmd_pub = rospy.Publisher("/cmd_vel_direct", Twist, queue_size=10)
@@ -137,6 +142,9 @@ class BOTanicaBrain:
         # Mux control: switch between GVF and direct control
         # True = use GVF cmd_vel, False = use direct cmd_vel
         self.nav_mode_pub = rospy.Publisher("/nav_mode_gvf", Bool, queue_size=1)
+
+        # State publisher for MCP server to read
+        self.state_pub = rospy.Publisher("/botanica/state", String, queue_size=1)
 
         # === SUBSCRIBERS ===
         # Battery from RoboMaster via Pi
@@ -153,6 +161,9 @@ class BOTanicaBrain:
 
         # Odometry as backup / for yaw
         rospy.Subscriber("/odom", Odometry, self.odom_callback)
+
+        # Voice commands from MCP server
+        rospy.Subscriber("/voice_command", String, self.voice_command_callback)
 
         rospy.loginfo("BOTanica Brain initialized")
         rospy.loginfo(f"  Battery threshold: {self.BATTERY_LOW_THRESHOLD*100}%")
@@ -196,6 +207,101 @@ class BOTanicaBrain:
             self.image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as e:
             rospy.logerr(f"Image error: {e}")
+
+    def voice_command_callback(self, msg):
+        """
+        Handle voice commands from MCP server.
+        Message format: "COMMAND|raw_text|force|source"
+        """
+        try:
+            parts = msg.data.split("|")
+            if len(parts) < 4:
+                rospy.logwarn(f"Invalid voice command format: {msg.data}")
+                return
+
+            command = parts[0]
+            raw_text = parts[1]
+            force = parts[2].lower() == "true"
+            source = parts[3]
+
+            rospy.loginfo(f"Voice command received: {command} (force={force}, source={source})")
+
+            # Handle force override
+            if force:
+                self.force_override_active = True
+                self.force_override_until = rospy.Time.now() + rospy.Duration(self.FORCE_OVERRIDE_DURATION)
+                rospy.logwarn(f"FORCE OVERRIDE ACTIVE for {self.FORCE_OVERRIDE_DURATION}s - safety priorities bypassed")
+
+            # Execute command
+            if command == "STOP":
+                rospy.loginfo("Voice command: STOP")
+                self.stop()
+                self.stop_gvf_navigation()
+                self.state = State.IDLE
+                self.reset_light_seeking()
+
+            elif command == "GO_TO_WATER":
+                if self._can_execute_voice_command("GO_TO_WATER"):
+                    rospy.loginfo("Voice command: GO_TO_WATER")
+                    self.stop_gvf_navigation()
+                    self.state = State.GO_TO_WATER
+                    self.reset_light_seeking()
+                    self.start_gvf_navigation(self.WATER_COORDS)
+
+            elif command == "GO_TO_DOCK":
+                # GO_TO_DOCK is always allowed
+                rospy.loginfo("Voice command: GO_TO_DOCK")
+                self.stop_gvf_navigation()
+                self.state = State.GO_TO_DOCK
+                self.reset_light_seeking()
+                self.start_gvf_navigation(self.DOCK_COORDS)
+
+            elif command == "LIGHT_SCAN":
+                if self._can_execute_voice_command("LIGHT_SCAN"):
+                    rospy.loginfo("Voice command: LIGHT_SCAN")
+                    self.stop_gvf_navigation()
+                    self.state = State.LIGHT_SCAN
+                    self.reset_light_seeking()
+
+            elif command == "STATUS":
+                # Status is handled by MCP server, just log
+                rospy.loginfo("Voice command: STATUS (handled by MCP)")
+
+            else:
+                rospy.logwarn(f"Unknown voice command: {command}")
+
+        except Exception as e:
+            rospy.logerr(f"Voice command error: {e}")
+
+    def _can_execute_voice_command(self, command):
+        """
+        Check if a voice command can be executed given current safety priorities.
+        Returns True if command is allowed, False otherwise.
+        """
+        # Force override bypasses all checks
+        if self.force_override_active:
+            if self.force_override_until and rospy.Time.now() > self.force_override_until:
+                self.force_override_active = False
+                rospy.loginfo("Force override expired - normal priorities restored")
+            else:
+                rospy.loginfo(f"Force override active - allowing {command}")
+                return True
+
+        # P1: Battery critical check
+        if self.battery_percent < self.BATTERY_LOW_THRESHOLD:
+            if command not in ["GO_TO_DOCK", "STOP"]:
+                rospy.logwarn(f"Cannot execute {command}: battery critical ({self.battery_percent*100:.0f}%)")
+                rospy.logwarn("Use 'force' to override, or go to dock first")
+                return False
+
+        # P2: Moisture check (only blocks light-seeking during active water need)
+        if command == "LIGHT_SCAN" and self.soil_moisture < self.MOISTURE_LOW_THRESHOLD:
+            if self.state not in [State.GO_TO_WATER, State.DOSING]:
+                rospy.logwarn(f"Cannot seek light: moisture low ({self.soil_moisture}%)")
+                rospy.logwarn("Use 'force' to override, or go to water first")
+                return False
+
+        return True
 
     # === UTILITY FUNCTIONS ===
 
@@ -305,28 +411,38 @@ class BOTanicaBrain:
     # === MAIN UPDATE LOOP ===
 
     def update(self, _):
-        # === PRIORITY CHECKS (run every cycle) ===
+        # === CHECK FORCE OVERRIDE EXPIRY ===
+        if self.force_override_active:
+            if self.force_override_until and rospy.Time.now() > self.force_override_until:
+                self.force_override_active = False
+                rospy.loginfo("Force override expired - normal priorities restored")
 
-        # P1: Battery critical - override everything except charging
-        if self.battery_percent < self.BATTERY_LOW_THRESHOLD:
-            if self.state not in [State.GO_TO_DOCK, State.CHARGING]:
-                rospy.logwarn(f"Battery low ({self.battery_percent*100:.1f}%)! Going to dock.")
-                self.stop_gvf_navigation()
-                self.state = State.GO_TO_DOCK
-                self.reset_light_seeking()
-                self.start_gvf_navigation(self.DOCK_COORDS)
+        # === PRIORITY CHECKS (run every cycle, unless force override is active) ===
+        if not self.force_override_active:
+            # P1: Battery critical - override everything except charging
+            if self.battery_percent < self.BATTERY_LOW_THRESHOLD:
+                if self.state not in [State.GO_TO_DOCK, State.CHARGING]:
+                    rospy.logwarn(f"Battery low ({self.battery_percent*100:.1f}%)! Going to dock.")
+                    self.stop_gvf_navigation()
+                    self.state = State.GO_TO_DOCK
+                    self.reset_light_seeking()
+                    self.start_gvf_navigation(self.DOCK_COORDS)
 
-        # P2: Moisture low - override light-seeking (but not battery states)
-        elif self.soil_moisture < self.MOISTURE_LOW_THRESHOLD:
-            if self.state in [State.IDLE, State.LIGHT_SCAN, State.LIGHT_ALIGN, State.LIGHT_MOVE]:
-                rospy.logwarn(f"Moisture low ({self.soil_moisture}%)! Going to water.")
-                self.stop_gvf_navigation()
-                self.state = State.GO_TO_WATER
-                self.reset_light_seeking()
-                self.start_gvf_navigation(self.WATER_COORDS)
+            # P2: Moisture low - override light-seeking (but not battery states)
+            elif self.soil_moisture < self.MOISTURE_LOW_THRESHOLD:
+                if self.state in [State.IDLE, State.LIGHT_SCAN, State.LIGHT_ALIGN, State.LIGHT_MOVE]:
+                    rospy.logwarn(f"Moisture low ({self.soil_moisture}%)! Going to water.")
+                    self.stop_gvf_navigation()
+                    self.state = State.GO_TO_WATER
+                    self.reset_light_seeking()
+                    self.start_gvf_navigation(self.WATER_COORDS)
+
+        # Publish current state for MCP server
+        self.state_pub.publish(String(data=self.state.value))
 
         # Log current state
-        rospy.loginfo_throttle(2, f"State: {self.state.value} | Nav: {self.nav_mode.value} | Battery: {self.battery_percent*100:.0f}% | Moisture: {self.soil_moisture}%")
+        force_str = " [FORCE]" if self.force_override_active else ""
+        rospy.loginfo_throttle(2, f"State: {self.state.value}{force_str} | Nav: {self.nav_mode.value} | Battery: {self.battery_percent*100:.0f}% | Moisture: {self.soil_moisture}%")
 
         # === STATE MACHINE ===
 

@@ -1,0 +1,11 @@
+# BOTanica Voice Control Dependencies
+
+# OpenAI for Whisper API
+openai>=1.0.0
+
+# Audio recording
+sounddevice>=0.4.6
+numpy>=1.21.0
+
+# Note: Also need system package for audio
+# sudo apt install libportaudio2 portaudio19-dev
