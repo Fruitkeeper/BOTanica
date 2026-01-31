@@ -28,7 +28,6 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger, TriggerResponse
 
 # Local imports
-from command_parser import CommandParser
 from whisper_client import WhisperClient
 
 # Audio recording imports
@@ -62,15 +61,14 @@ class VoiceListenerNode:
             sys.exit(1)
 
         # Initialize components
-        self.parser = CommandParser()
         self.whisper = WhisperClient()
 
         # State
         self.is_recording = False
         self.last_command_time = rospy.Time.now()
 
-        # Publisher for voice commands
-        self.cmd_pub = rospy.Publisher("/voice_command", String, queue_size=10)
+        # Publisher for raw transcriptions (consumed by agent_node)
+        self.raw_pub = rospy.Publisher("/voice_raw", String, queue_size=10)
 
         # Service for push-to-talk trigger
         self.listen_srv = rospy.Service("~listen", Trigger, self.handle_listen_trigger)
@@ -207,21 +205,10 @@ class VoiceListenerNode:
             rospy.loginfo(f"Heard: '{transcription}'")
             self.status_pub.publish(String(data=f"heard: {transcription}"))
 
-            # Parse command
-            parsed = self.parser.parse(transcription)
-
-            if not parsed["recognized"]:
-                rospy.logwarn(f"Command not recognized: '{transcription}'")
-                self.status_pub.publish(String(data="not recognized"))
-                return
-
-            # Publish command
-            # Format: command|raw_text|force|source
-            msg_data = f"{parsed['command']}|{transcription}|{parsed['force']}|voice"
-            self.cmd_pub.publish(String(data=msg_data))
-
-            rospy.loginfo(f"Published command: {parsed['command']} (force={parsed['force']})")
-            self.status_pub.publish(String(data=f"command: {parsed['command']}"))
+            # Publish raw transcription for agent_node to process
+            self.raw_pub.publish(String(data=transcription))
+            rospy.loginfo(f"Published raw transcription to /voice_raw")
+            self.status_pub.publish(String(data=f"sent: {transcription}"))
 
             self.last_command_time = rospy.Time.now()
 

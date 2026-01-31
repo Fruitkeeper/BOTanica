@@ -12,6 +12,7 @@ Navigation is handled by vectorfield_stack (GVF).
 This node publishes target paths and monitors arrival.
 Light-seeking uses direct cmd_vel control (no GVF needed for rotation/short moves).
 """
+import json
 import rospy
 import cv2
 import numpy as np
@@ -145,6 +146,9 @@ class BOTanicaBrain:
 
         # State publisher for MCP server to read
         self.state_pub = rospy.Publisher("/botanica/state", String, queue_size=1)
+
+        # Detailed state publisher for agent controller (JSON)
+        self.state_detail_pub = rospy.Publisher("/botanica/state_detail", String, queue_size=1)
 
         # === SUBSCRIBERS ===
         # Battery from RoboMaster via Pi
@@ -439,6 +443,18 @@ class BOTanicaBrain:
 
         # Publish current state for MCP server
         self.state_pub.publish(String(data=self.state.value))
+
+        # Publish detailed state for agent controller
+        state_detail = json.dumps({
+            "state": self.state.value,
+            "battery_pct": round(self.battery_percent * 100, 1),
+            "moisture_pct": self.soil_moisture,
+            "position": list(self.current_pose[:2]) if self.current_pose else None,
+            "yaw_deg": round(np.degrees(self.current_yaw), 1),
+            "nav_target": list(self.nav_target) if self.nav_target else None,
+            "force_override": self.force_override_active,
+        })
+        self.state_detail_pub.publish(String(data=state_detail))
 
         # Log current state
         force_str = " [FORCE]" if self.force_override_active else ""

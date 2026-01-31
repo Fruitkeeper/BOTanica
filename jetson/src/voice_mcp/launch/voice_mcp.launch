@@ -1,10 +1,13 @@
 <!--
 BOTanica Voice Control Launch File
 
-Launches the voice listener node that:
-1. Listens to microphone
-2. Transcribes with OpenAI Whisper API
-3. Publishes commands to /voice_command
+Launches:
+1. Voice listener node (microphone -> Whisper -> raw text on /voice_raw)
+2. Agent controller node (LLM-powered agentic loop for complex goals)
+
+The agent node receives raw transcriptions, decides if they're simple
+pass-through commands or complex goals requiring GPT-4 planning,
+and executes accordingly.
 
 Prerequisites:
 - USB microphone connected to Jetson
@@ -20,12 +23,19 @@ Modes:
   - continuous: Always listening with voice activity detection
 -->
 <launch>
-    <!-- Arguments -->
+    <!-- Voice Listener Arguments -->
     <arg name="mode" default="push_to_talk" doc="Listening mode: 'push_to_talk' or 'continuous'"/>
     <arg name="sample_rate" default="16000" doc="Audio sample rate in Hz"/>
     <arg name="max_record_duration" default="10.0" doc="Maximum recording duration in seconds"/>
     <arg name="silence_threshold" default="0.01" doc="RMS threshold for voice activity detection"/>
     <arg name="silence_duration" default="1.5" doc="Seconds of silence to stop recording"/>
+
+    <!-- Agent Controller Arguments -->
+    <arg name="gpt_model" default="gpt-4" doc="OpenAI model for agentic planning"/>
+    <arg name="max_steps" default="20" doc="Max LLM steps per goal"/>
+    <arg name="step_timeout" default="120.0" doc="Timeout per action step (seconds)"/>
+    <arg name="move_speed" default="0.15" doc="Default linear speed (m/s)"/>
+    <arg name="turn_speed" default="0.5" doc="Default angular speed (rad/s)"/>
 
     <!-- Voice Listener Node -->
     <node pkg="voice_mcp" type="voice_listener_node.py" name="voice_listener" output="screen">
@@ -34,5 +44,14 @@ Modes:
         <param name="max_record_duration" value="$(arg max_record_duration)"/>
         <param name="silence_threshold" value="$(arg silence_threshold)"/>
         <param name="silence_duration" value="$(arg silence_duration)"/>
+    </node>
+
+    <!-- Agent Controller Node (LLM-powered agentic loop) -->
+    <node pkg="voice_mcp" type="agent_node.py" name="agent_controller" output="screen">
+        <param name="gpt_model" value="$(arg gpt_model)"/>
+        <param name="max_steps" value="$(arg max_steps)"/>
+        <param name="step_timeout" value="$(arg step_timeout)"/>
+        <param name="move_speed" value="$(arg move_speed)"/>
+        <param name="turn_speed" value="$(arg turn_speed)"/>
     </node>
 </launch>
