@@ -39,7 +39,6 @@ Usage:
     <rosparam file="$(find light_follower)/config/gvf_params.yaml" command="load" ns="gvf"/>
 
     <!-- Ground robot GVF controller -->
-    <!-- Note: You may need to adjust the node name/package based on vectorfield_stack structure -->
     <node pkg="ground_robot" type="differential_node.py" name="gvf_controller" output="screen">
         <remap from="pose" to="$(arg pose_topic)"/>
         <remap from="cmd_vel" to="/cmd_vel_gvf"/>

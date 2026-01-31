@@ -1,9 +1,9 @@
   <launch>
       <!-- BLE Sensor Publisher -->
-      <node 
-          name="sensor_publisher" 
-          pkg="sensor_publisher" 
-          type="sensorInfo.py" 
+      <node
+          name="sensor_publisher"
+          pkg="sensor_publisher"
+          type="sensorInfo.py"
           output="screen"
       />
 
@@ -13,4 +13,3 @@
           <arg name="enable_depth" value="false" />
       </include>
   </launch>
-  
