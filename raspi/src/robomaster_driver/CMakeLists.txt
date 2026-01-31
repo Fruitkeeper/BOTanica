@@ -1,21 +1,22 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(robomaster_driver)
 
-# Use catkin_simple for simplicity
-find_package(catkin_simple REQUIRED)
-
-catkin_simple()
-
-# Install Python scripts
-cs_install_scripts(
-    src/pathPlanner.py  # Add only the scripts you have
+find_package(catkin REQUIRED COMPONENTS
+  rospy
+  geometry_msgs
+  sensor_msgs
+  nav_msgs
 )
 
-# ✅ Install the launch folder
+catkin_package()
+
+# Install Python scripts
+catkin_install_python(PROGRAMS
+  src/robomaster_driver_node.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+# Install launch files
 install(DIRECTORY launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
-
-
-# Export the package
-cs_export()

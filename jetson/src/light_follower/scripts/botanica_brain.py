@@ -146,7 +146,7 @@ class BOTanicaBrain:
         rospy.Subscriber("/sensor_data", SensorData, self.sensor_callback)
 
         # Position from OptiTrack (adjust topic/type as needed)
-        rospy.Subscriber("/pose", PoseStamped, self.pose_callback)
+        rospy.Subscriber("/natnet_ros/umh_5/pose", PoseStamped, self.pose_callback)
 
         # Camera for light detection
         rospy.Subscriber("/camera/color/image_raw", Image, self.image_callback)

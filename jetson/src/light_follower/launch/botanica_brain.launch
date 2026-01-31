@@ -20,7 +20,7 @@ Usage:
 <launch>
     <!-- ========== ARGUMENTS ========== -->
     <!-- OptiTrack pose topic (adjust if your setup differs) -->
-    <arg name="pose_topic" default="/pose"/>
+    <arg name="pose_topic" default="/natnet_ros/umh_5/pose"/>
 
     <!-- Waypoint coordinates (update for your OptiTrack setup) -->
     <arg name="dock_x" default="0.0"/>
