@@ -6,8 +6,10 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   sensor_msgs
   geometry_msgs
+  nav_msgs
   cv_bridge
   image_transport
+  sensor_publisher
 )
 
 catkin_package()
@@ -17,6 +19,11 @@ include_directories(
 )
 
 catkin_install_python(PROGRAMS
-  scripts/light_follower_node.py
+  scripts/botanica_brain.py
+  scripts/cmd_vel_mux.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(DIRECTORY launch config
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
