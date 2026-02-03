@@ -134,6 +134,7 @@ class BOTanicaBrain:
         self.scan_start_yaw = None
         self.scan_last_yaw = None
         self.scan_accumulated_rotation = 0.0
+        self.scan_start_time = None
         self.brightness_log = []
         self.target_yaw = 0.0
         self.move_start_pos = None
@@ -439,6 +440,7 @@ class BOTanicaBrain:
             self.scan_last_yaw = self.current_yaw
             self.scan_accumulated_rotation = 0.0
             self.brightness_log = []
+            self.scan_start_time = rospy.Time.now()
 
         brightness = self.get_brightness()
 
@@ -455,7 +457,9 @@ class BOTanicaBrain:
         # Debug log
         rospy.loginfo_throttle(1, f"SCAN: accumulated={np.degrees(self.scan_accumulated_rotation):.1f}° current_yaw={np.degrees(self.current_yaw):.1f}°")
 
-        if self.scan_accumulated_rotation < 2 * np.pi:
+        # Require at least 6 seconds of scanning AND 330 degrees of rotation
+        scan_duration = (rospy.Time.now() - self.scan_start_time).to_sec()
+        if self.scan_accumulated_rotation < 5.76 or scan_duration < 6.0:  # 5.76 rad = 330 degrees
             # Keep rotating
             self.publish_direct_cmd(angular_z=0.25)
         else:
