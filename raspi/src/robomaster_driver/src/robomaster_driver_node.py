@@ -53,9 +53,15 @@ class RoboMasterDriver:
         try:
             # Get connection mode from ROS parameter
             conn_mode = rospy.get_param("~connection_mode", "USB")
-            
+            robot_ip = rospy.get_param("~robot_ip", "")
+
             if conn_mode == "WIFI":
-                self._robot.initialize(conn_type="sta")
+                if robot_ip:
+                    # Direct connection to known IP
+                    self._robot.initialize(conn_type="sta", sn=robot_ip)
+                else:
+                    # Auto-discover via UDP broadcast
+                    self._robot.initialize(conn_type="sta")
             elif conn_mode == "USB":
                 self._robot.initialize(conn_type="rndis")
             else:
