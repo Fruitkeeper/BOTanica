@@ -448,10 +448,9 @@ class BOTanicaBrain:
         if abs(self.angle_diff(self.current_yaw, self.scan_last_yaw)) > 0.01:
             self.brightness_log.append((self.current_yaw, brightness))
 
-        # Track rotation - only count positive rotation (direction we're commanding)
+        # Track rotation - count absolute rotation
         delta = self.angle_diff(self.current_yaw, self.scan_last_yaw)
-        if delta > 0.01:  # Only count significant positive movement
-            self.scan_accumulated_rotation += delta
+        self.scan_accumulated_rotation += abs(delta)
         self.scan_last_yaw = self.current_yaw
 
         # Debug log
@@ -492,7 +491,8 @@ class BOTanicaBrain:
         rospy.loginfo_throttle(2, f"ALIGN: target={np.degrees(self.target_yaw):.1f}° current={np.degrees(self.current_yaw):.1f}° error={np.degrees(error):.1f}°")
 
         if abs(error) > 0.1:  # Increased threshold from 0.05 to 0.1 (~6 degrees)
-            self.publish_direct_cmd(angular_z=0.25 if error > 0 else -0.25)
+            # Flip sign: if error is positive, we need negative angular_z to reduce it
+            self.publish_direct_cmd(angular_z=-0.25 if error > 0 else 0.25)
         else:
             self.stop()
             rospy.loginfo("Aligned. Moving toward light.")
