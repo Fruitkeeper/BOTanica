@@ -23,7 +23,26 @@ from geometry_msgs.msg import Twist, PoseStamped, Point32
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from cv_bridge import CvBridge
-from tf.transformations import euler_from_quaternion
+import math
+
+def euler_from_quaternion(q):
+    """Convert quaternion [x, y, z, w] to euler angles [roll, pitch, yaw]"""
+    x, y, z, w = q
+    # Roll (x-axis rotation)
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    # Pitch (y-axis rotation)
+    sinp = 2 * (w * y - z * x)
+    if abs(sinp) >= 1:
+        pitch = math.copysign(math.pi / 2, sinp)
+    else:
+        pitch = math.asin(sinp)
+    # Yaw (z-axis rotation)
+    siny_cosp = 2 * (w * z + x * y)
+    cosy_cosp = 1 - 2 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return roll, pitch, yaw
 
 # Import custom sensor message
 from sensor_publisher.msg import SensorData

@@ -13,7 +13,7 @@ class SensorDataResponse(GATTResponse):
         try:
             # Unpack sensor data
             temperature, sunlight, moisture, fertility = unpack('<hxIBHxxxxxx', data)
-            
+
             # Create and publish ROS message
             msg = SensorData()
             msg.temperature = temperature / 10.0  # Convert to °C
@@ -21,31 +21,31 @@ class SensorDataResponse(GATTResponse):
             msg.moisture = moisture
             msg.fertility = fertility
             self.publisher.publish(msg)
-            
+
         except Exception as e:
-            rospy.logerr(f"Error unpacking sensor data: {str(e)}")
+            rospy.logerr("Error unpacking sensor data: {}".format(str(e)))
 
 def main():
     rospy.init_node('sensor_publisher')
     pub = rospy.Publisher('sensor_data', SensorData, queue_size=10)
-    
+
     address = "5C:85:7E:12:D0:2E"  # BLE device address
-        requester = GATTRequester(address, False)
+    requester = GATTRequester(address, False)
     response = SensorDataResponse(pub)
 
     while not rospy.is_shutdown():
-            try:
+        try:
             rospy.loginfo("Connecting to device...")
-                requester.connect(True)
+            requester.connect(True)
             rospy.loginfo("Connected to device")
 
             # Read battery and firmware (optional)
-                try:
-                    data = requester.read_by_handle(0x0038)[0]
-                    battery, version = unpack('<B6s', data)
-                rospy.loginfo(f"Battery: {battery}%, Firmware: {version.decode('utf-8').strip()}")
+            try:
+                data = requester.read_by_handle(0x0038)[0]
+                battery, version = unpack('<B6s', data)
+                rospy.loginfo("Battery: {}%, Firmware: {}".format(battery, version.decode('utf-8').strip()))
             except Exception as e:
-                rospy.logwarn(f"Error reading battery/firmware: {e}")
+                rospy.logwarn("Error reading battery/firmware: {}".format(e))
 
             # Enable real-time data
             requester.write_by_handle(0x0033, bytes([0xa0, 0x1f]))
@@ -56,13 +56,12 @@ def main():
                 requester.read_by_handle_async(0x0035, response)
                 time.sleep(5)  # Throttle publish rate
 
-    except Exception as e:
-            rospy.logerr(f"Connection error: {str(e)}. Retrying...")
+        except Exception as e:
+            rospy.logerr("Connection error: {}. Retrying...".format(str(e)))
             time.sleep(5)
 
 if __name__ == "__main__":
     try:
-    main()
+        main()
     except rospy.ROSInterruptException:
         pass
-
