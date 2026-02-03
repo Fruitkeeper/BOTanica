@@ -446,14 +446,15 @@ class BOTanicaBrain:
         if abs(self.angle_diff(self.current_yaw, self.scan_last_yaw)) > 0.01:
             self.brightness_log.append((self.current_yaw, brightness))
 
-        # Track rotation
+        # Track rotation - only count positive rotation (direction we're commanding)
         delta = self.angle_diff(self.current_yaw, self.scan_last_yaw)
-        self.scan_accumulated_rotation += abs(delta)
+        if delta > 0:
+            self.scan_accumulated_rotation += delta
         self.scan_last_yaw = self.current_yaw
 
         if self.scan_accumulated_rotation < 2 * np.pi:
             # Keep rotating
-            self.publish_direct_cmd(angular_z=0.4)
+            self.publish_direct_cmd(angular_z=0.3)
         else:
             # Scan complete
             self.stop()
