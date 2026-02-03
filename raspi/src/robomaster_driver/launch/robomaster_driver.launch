@@ -3,7 +3,6 @@
   <!-- Launch the driver node -->
   <node name="robomaster_driver" pkg="robomaster_driver" type="robomaster_driver_node.py" output="screen">
     <param name="connection_mode" value="WIFI"/>
-    <param name="robot_ip" value="10.205.1.229"/>
   </node>
 
 </launch>
