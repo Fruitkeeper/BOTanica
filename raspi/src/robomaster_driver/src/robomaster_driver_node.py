@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import rospy
-from robomaster import robot
+from robomaster import robot, config
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image, Imu, JointState, BatteryState
 from nav_msgs.msg import Odometry
@@ -58,10 +58,8 @@ class RoboMasterDriver:
             if conn_mode == "WIFI":
                 if robot_ip:
                     # Direct connection to known IP
-                    self._robot.initialize(conn_type="sta", sn=robot_ip)
-                else:
-                    # Auto-discover via UDP broadcast
-                    self._robot.initialize(conn_type="sta")
+                    config.ROBOT_IP_STR = robot_ip
+                self._robot.initialize(conn_type="sta")
             elif conn_mode == "USB":
                 self._robot.initialize(conn_type="rndis")
             else:
