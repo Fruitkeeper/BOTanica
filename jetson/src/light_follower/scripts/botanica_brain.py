@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 BOTanica Brain - Priority-based behavior controller with GVF navigation
@@ -22,9 +22,19 @@ from sensor_msgs.msg import Image, BatteryState
 from geometry_msgs.msg import Twist, PoseStamped, Point32
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, String, Float32
-from cv_bridge import CvBridge
 import math
 import time
+
+# cv_bridge replacement for Python 3
+def imgmsg_to_cv2(img_msg, desired_encoding="bgr8"):
+    """Convert ROS Image message to OpenCV image without cv_bridge"""
+    dtype = np.uint8
+    img = np.frombuffer(img_msg.data, dtype=dtype).reshape(img_msg.height, img_msg.width, -1)
+    if img_msg.encoding == "rgb8" and desired_encoding == "bgr8":
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    elif img_msg.encoding == "bgr8" and desired_encoding == "rgb8":
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
 
 def euler_from_quaternion(q):
     """Convert quaternion [x, y, z, w] to euler angles [roll, pitch, yaw]"""
@@ -118,7 +128,7 @@ class BOTanicaBrain:
         self.DOCK_COORDS = (dock_x, dock_y)
         self.WATER_COORDS = (water_x, water_y)
 
-        self.bridge = CvBridge()
+        # Using custom imgmsg_to_cv2 instead of CvBridge for Python 3 compatibility
         self.state = State.IDLE
         self.nav_mode = NavigationMode.DIRECT
 
@@ -223,7 +233,7 @@ class BOTanicaBrain:
 
     def image_callback(self, msg):
         try:
-            self.image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            self.image = imgmsg_to_cv2(msg, "bgr8")
         except Exception as e:
             rospy.logerr(f"Image error: {e}")
 
