@@ -594,6 +594,7 @@ class BOTanicaBrain:
             self.bright_counter = 0
 
         if dist < 1.0:
+            rospy.loginfo_throttle(2, f"[MOVE] dist={dist:.2f}m brightness={brightness:.0f} moving forward at {self.LIGHT_MOVE_SPEED} m/s")
             self.publish_direct_cmd(linear_x=self.LIGHT_MOVE_SPEED)
         else:
             rospy.loginfo("Moved 1m. Rescanning.")
