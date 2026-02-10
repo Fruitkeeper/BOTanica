@@ -139,7 +139,8 @@ class BOTanicaBrain:
 
         # Position data
         self.current_pose = None       # (x, y, yaw) from OptiTrack
-        self.current_yaw = 0.0
+        self.current_yaw = 0.0         # Yaw from OptiTrack (for navigation)
+        self.odom_yaw = 0.0            # Yaw from robot odometry (for light seeking)
 
         # Light-seeking state
         self.scan_start_yaw = None
@@ -222,10 +223,11 @@ class BOTanicaBrain:
         self.current_yaw = yaw
 
     def odom_callback(self, msg):
-        """Backup odometry from RoboMaster"""
+        """Odometry from RoboMaster - always update odom_yaw for light seeking"""
         orient = msg.pose.pose.orientation
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
-        # Only use if no OptiTrack pose
+        self.odom_yaw = yaw  # Always track robot's own yaw for light seeking
+        # Only use for position if no OptiTrack pose
         if self.current_pose is None:
             pos = msg.pose.pose.position
             self.current_pose = (pos.x, pos.y, yaw)
@@ -468,9 +470,9 @@ class BOTanicaBrain:
         if self.scan_start_yaw is None:
             rospy.loginfo("=" * 50)
             rospy.loginfo("[SCAN START] Starting 360° light scan...")
-            rospy.loginfo(f"[SCAN START] initial_yaw={np.degrees(self.current_yaw):.1f}°")
-            self.scan_start_yaw = self.current_yaw
-            self.scan_last_yaw = self.current_yaw
+            rospy.loginfo(f"[SCAN START] initial_yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
+            self.scan_start_yaw = self.odom_yaw
+            self.scan_last_yaw = self.odom_yaw
             self.scan_accumulated_rotation = 0.0
             self.brightness_log = []
             self.scan_start_time = rospy.Time.now()
@@ -480,24 +482,24 @@ class BOTanicaBrain:
 
         brightness = self.get_brightness()
 
-        # Log brightness at each angle
-        if abs(self.angle_diff(self.current_yaw, self.scan_last_yaw)) > 0.01:
-            self.brightness_log.append((self.current_yaw, brightness))
+        # Log brightness at each angle (use odom_yaw for light seeking)
+        if abs(self.angle_diff(self.odom_yaw, self.scan_last_yaw)) > 0.01:
+            self.brightness_log.append((self.odom_yaw, brightness))
 
         # Track rotation - count absolute rotation
-        delta = self.angle_diff(self.current_yaw, self.scan_last_yaw)
+        delta = self.angle_diff(self.odom_yaw, self.scan_last_yaw)
         self.scan_accumulated_rotation += abs(delta)
 
         # === DEBUG: Sample yaw for analysis ===
-        self._debug_yaw_samples.append((time.time(), self.current_yaw, delta))
+        self._debug_yaw_samples.append((time.time(), self.odom_yaw, delta))
 
         # === DEBUG: Detect if yaw is stuck ===
         if len(self._debug_yaw_samples) > 10:
             recent_deltas = [abs(s[2]) for s in self._debug_yaw_samples[-10:]]
             if all(d < 0.001 for d in recent_deltas):
-                rospy.logwarn(f"[SCAN STUCK?] Yaw hasn't changed in 10 samples! yaw={np.degrees(self.current_yaw):.1f}°")
+                rospy.logwarn(f"[SCAN STUCK?] Yaw hasn't changed in 10 samples! yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
 
-        self.scan_last_yaw = self.current_yaw
+        self.scan_last_yaw = self.odom_yaw
 
         # Require at least 6 seconds of scanning AND 330 degrees of rotation
         scan_duration = (rospy.Time.now() - self.scan_start_time).to_sec()
@@ -506,7 +508,7 @@ class BOTanicaBrain:
 
         # === DEBUG: Detailed progress log ===
         progress_pct = min(100, (self.scan_accumulated_rotation / target_rotation_rad) * 100)
-        status_msg = f"accumulated={np.degrees(self.scan_accumulated_rotation):.1f}°/{target_rotation_deg}° ({progress_pct:.0f}%) yaw={np.degrees(self.current_yaw):.1f}° duration={scan_duration:.1f}s cmds={self._debug_cmd_count}"
+        status_msg = f"accumulated={np.degrees(self.scan_accumulated_rotation):.1f}°/{target_rotation_deg}° ({progress_pct:.0f}%) yaw={np.degrees(self.odom_yaw):.1f}° duration={scan_duration:.1f}s cmds={self._debug_cmd_count}"
         rospy.loginfo_throttle(1, f"[SCAN] {status_msg}")
         self.debug_scan_pub.publish(String(data=status_msg))
 
@@ -518,7 +520,7 @@ class BOTanicaBrain:
             self.stop()
             rospy.loginfo("=" * 50)
             rospy.loginfo(f"[SCAN COMPLETE] total_rotation={np.degrees(self.scan_accumulated_rotation):.1f}° duration={scan_duration:.1f}s")
-            rospy.loginfo(f"[SCAN COMPLETE] start_yaw={np.degrees(self.scan_start_yaw):.1f}° end_yaw={np.degrees(self.current_yaw):.1f}°")
+            rospy.loginfo(f"[SCAN COMPLETE] start_yaw={np.degrees(self.scan_start_yaw):.1f}° end_yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
             rospy.loginfo(f"[SCAN COMPLETE] total_cmds={self._debug_cmd_count} samples={len(self._debug_yaw_samples)}")
             if self._debug_scan_cmd_gaps:
                 rospy.logwarn(f"[SCAN COMPLETE] cmd_gaps>{300}ms: {len(self._debug_scan_cmd_gaps)} (max={max(self._debug_scan_cmd_gaps)*1000:.0f}ms)")
@@ -547,12 +549,15 @@ class BOTanicaBrain:
         if self.nav_mode != NavigationMode.DIRECT:
             self.set_nav_mode(NavigationMode.DIRECT)
 
-        error = self.angle_diff(self.target_yaw, self.current_yaw)
-        rospy.loginfo_throttle(2, f"ALIGN: target={np.degrees(self.target_yaw):.1f}° current={np.degrees(self.current_yaw):.1f}° error={np.degrees(error):.1f}°")
+        error = self.angle_diff(self.target_yaw, self.odom_yaw)
+        rospy.loginfo_throttle(2, f"ALIGN: target={np.degrees(self.target_yaw):.1f}° current={np.degrees(self.odom_yaw):.1f}° error={np.degrees(error):.1f}° (odom)")
 
-        if abs(error) > 0.1:  # Increased threshold from 0.05 to 0.1 (~6 degrees)
-            # Flip sign: if error is positive, we need negative angular_z to reduce it
-            self.publish_direct_cmd(angular_z=-0.25 if error > 0 else 0.25)
+        if abs(error) > 0.1:  # ~6 degrees threshold
+            # Turn in the direction that reduces the error
+            # Positive error means target is counterclockwise from current -> turn counterclockwise (positive angular_z)
+            # Negative error means target is clockwise from current -> turn clockwise (negative angular_z)
+            turn_speed = 0.25 if error > 0 else -0.25
+            self.publish_direct_cmd(angular_z=turn_speed)
         else:
             self.stop()
             rospy.loginfo("Aligned. Moving toward light.")
