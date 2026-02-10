@@ -4,37 +4,54 @@ from robomaster import robot, config
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image, Imu, JointState, BatteryState
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Float32, String
 from threading import Thread
 from cv_bridge import CvBridge
 import numpy as np
 import tf
+import time
 
 class RoboMasterDriver:
     def __init__(self):
         """Initialize the RoboMaster driver node"""
         rospy.loginfo("Starting RoboMaster driver initialization...")
-        
+
         # Initialize robot
         self._robot = robot.Robot()
         self._connect_to_robot()
-        
+
         # Robot parameters
         self.wheel_radius = 0.05    # Wheel radius in meters
         self.robot_width = 0.32     # Distance between left and right wheels
         self.robot_length = 0.32    # Distance between front and back wheels
-        
+
         # Safety timeout parameters
         self._last_cmd_time = rospy.Time.now()
         self._cmd_timeout = rospy.Duration(0.5)  # 500ms timeout
-        
+
         # Current state
         self._current_yaw = 0.0
+
+        # === DEBUG: Turn tracking ===
+        self._turn_start_yaw = None
+        self._turn_accumulated = 0.0
+        self._turn_last_yaw = None
+        self._turn_cmd_count = 0
+        self._turn_timeout_count = 0
+        self._last_angular_cmd = 0.0
+        self._cmd_received_count = 0
+        self._cmd_zero_count = 0
+        self._last_debug_time = time.time()
         
         # Publishers
         self._odom_pub = rospy.Publisher("odom", Odometry, queue_size=3)
         self._imu_pub = rospy.Publisher("imu/data", Imu, queue_size=3)
         self._joint_pub = rospy.Publisher("joint_states", JointState, queue_size=3)
         self._battery_pub = rospy.Publisher("battery", BatteryState, queue_size=3)
+
+        # === DEBUG publishers ===
+        self._debug_yaw_pub = rospy.Publisher("debug/yaw", Float32, queue_size=3)
+        self._debug_turn_pub = rospy.Publisher("debug/turn_status", String, queue_size=3)
         
         # Subscribers
         self._cmd_vel_sub = rospy.Subscriber("cmd_vel", Twist, self._cmd_vel_callback, queue_size=3)
@@ -85,21 +102,56 @@ class RoboMasterDriver:
         """
         try:
             self._last_cmd_time = rospy.Time.now()
-            
+            self._cmd_received_count += 1
+
             # Convert angular velocity from rad/s to deg/s
             angular_deg = msg.angular.z * 180.0 / np.pi
-            
-            # Calculate wheel velocities for rotation
-            # For a 45-degree turn, we need to rotate the robot by 45 degrees
-            # This can be achieved by moving the wheels at appropriate speeds
-            
+
+            # === DEBUG: Track turn commands ===
+            is_turning = abs(msg.angular.z) > 0.01
+            was_turning = abs(self._last_angular_cmd) > 0.01
+
+            if is_turning and not was_turning:
+                # Turn just started
+                self._turn_start_yaw = self._current_yaw
+                self._turn_accumulated = 0.0
+                self._turn_last_yaw = self._current_yaw
+                self._turn_cmd_count = 0
+                rospy.loginfo(f"[TURN START] yaw={self._current_yaw:.2f}° angular_cmd={angular_deg:.2f}°/s")
+
+            if is_turning:
+                self._turn_cmd_count += 1
+                # Log every 10th command to avoid spam
+                if self._turn_cmd_count % 10 == 0:
+                    rospy.loginfo(f"[TURN] cmd#{self._turn_cmd_count} yaw={self._current_yaw:.2f}° accumulated={self._turn_accumulated:.2f}° angular_cmd={angular_deg:.2f}°/s")
+
+            if was_turning and not is_turning:
+                # Turn just ended
+                rospy.loginfo(f"[TURN END] start_yaw={self._turn_start_yaw:.2f}° end_yaw={self._current_yaw:.2f}° accumulated={self._turn_accumulated:.2f}° total_cmds={self._turn_cmd_count}")
+                self._turn_start_yaw = None
+
+            if not is_turning:
+                self._cmd_zero_count += 1
+            else:
+                self._cmd_zero_count = 0
+
+            self._last_angular_cmd = msg.angular.z
+
+            # === DEBUG: Periodic summary ===
+            now = time.time()
+            if now - self._last_debug_time > 2.0:
+                self._last_debug_time = now
+                status = f"cmds={self._cmd_received_count} yaw={self._current_yaw:.1f}° timeouts={self._turn_timeout_count}"
+                rospy.loginfo(f"[DRIVER STATUS] {status}")
+                self._debug_turn_pub.publish(String(data=status))
+
             self._robot.chassis.drive_speed(
                 x=msg.linear.x,
                 y=msg.linear.y,
                 z=angular_deg,
                 timeout=1
             )
-            
+
         except Exception as e:
             rospy.logerr(f"Velocity command failed: {e}")
             self._robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
@@ -107,19 +159,34 @@ class RoboMasterDriver:
     def _attitude_callback(self, data):
         """Raw attitude data handler"""
         yaw, pitch, roll = data
-        
-        # Update current yaw directly from robot data
+
+        # === DEBUG: Track yaw changes during turn ===
+        old_yaw = self._current_yaw
         self._current_yaw = yaw
-        
+
+        # Publish debug yaw
+        self._debug_yaw_pub.publish(Float32(data=yaw))
+
+        # Track accumulated rotation if we're in a turn
+        if self._turn_last_yaw is not None and self._turn_start_yaw is not None:
+            # Calculate delta with wraparound handling (-180 to 180)
+            delta = yaw - self._turn_last_yaw
+            if delta > 180:
+                delta -= 360
+            elif delta < -180:
+                delta += 360
+            self._turn_accumulated += abs(delta)
+            self._turn_last_yaw = yaw
+
         msg = Imu()
         msg.header.stamp = rospy.Time.now()
         msg.header.frame_id = "imu_link"
-        
+
         # Convert degrees to radians for quaternion
         yaw_rad = yaw * np.pi / 180.0
         pitch_rad = pitch * np.pi / 180.0
         roll_rad = roll * np.pi / 180.0
-        
+
         # Create quaternion from Euler angles
         cy = np.cos(yaw_rad * 0.5)
         sy = np.sin(yaw_rad * 0.5)
@@ -132,7 +199,7 @@ class RoboMasterDriver:
         msg.orientation.x = sr * cp * cy - cr * sp * sy
         msg.orientation.y = cr * sp * cy + sr * cp * sy
         msg.orientation.z = cr * cp * sy - sr * sp * cy
-        
+
         self._imu_pub.publish(msg)
 
     def _imu_callback(self, data):
@@ -164,6 +231,11 @@ class RoboMasterDriver:
         """Raw position data handler"""
         # Check for command timeout
         if (rospy.Time.now() - self._last_cmd_time) > self._cmd_timeout:
+            # === DEBUG: Log timeout ===
+            if self._turn_start_yaw is not None:
+                self._turn_timeout_count += 1
+                rospy.logwarn(f"[TIMEOUT] Turn interrupted! accumulated={self._turn_accumulated:.2f}° timeout_count={self._turn_timeout_count}")
+                self._turn_start_yaw = None
             self._robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
         
         x, y, z = data

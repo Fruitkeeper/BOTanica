@@ -21,9 +21,10 @@ from enum import Enum
 from sensor_msgs.msg import Image, BatteryState
 from geometry_msgs.msg import Twist, PoseStamped, Point32
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String, Float32
 from cv_bridge import CvBridge
 import math
+import time
 
 def euler_from_quaternion(q):
     """Convert quaternion [x, y, z, w] to euler angles [roll, pitch, yaw]"""
@@ -140,6 +141,12 @@ class BOTanicaBrain:
         self.move_start_pos = None
         self.bright_counter = 0
 
+        # === DEBUG: Turn tracking ===
+        self._debug_cmd_count = 0
+        self._debug_last_cmd_time = time.time()
+        self._debug_yaw_samples = []
+        self._debug_scan_cmd_gaps = []  # Track gaps between commands
+
         # Navigation state
         self.nav_target = None
         self.gvf_active = False
@@ -157,6 +164,9 @@ class BOTanicaBrain:
         # Mux control: switch between GVF and direct control
         # True = use GVF cmd_vel, False = use direct cmd_vel
         self.nav_mode_pub = rospy.Publisher("/nav_mode_gvf", Bool, queue_size=1)
+
+        # === DEBUG: Scan status publisher ===
+        self.debug_scan_pub = rospy.Publisher("/debug/scan_status", String, queue_size=3)
 
         # === SUBSCRIBERS ===
         # Battery from RoboMaster via Pi
@@ -258,6 +268,17 @@ class BOTanicaBrain:
         """Publish direct velocity command (for light-seeking)"""
         if self.nav_mode != NavigationMode.DIRECT:
             self.set_nav_mode(NavigationMode.DIRECT)
+
+        # === DEBUG: Track command timing ===
+        now = time.time()
+        gap = now - self._debug_last_cmd_time
+        self._debug_last_cmd_time = now
+        self._debug_cmd_count += 1
+
+        # Warn if gap is too large (potential cause of timeout on raspi)
+        if gap > 0.3 and abs(angular_z) > 0.01:
+            rospy.logwarn(f"[CMD GAP] {gap*1000:.0f}ms between turn commands! cmd#{self._debug_cmd_count}")
+            self._debug_scan_cmd_gaps.append(gap)
 
         twist = Twist()
         twist.linear.x = linear_x
@@ -435,12 +456,17 @@ class BOTanicaBrain:
             return
 
         if self.scan_start_yaw is None:
-            rospy.loginfo("Starting 360° light scan...")
+            rospy.loginfo("=" * 50)
+            rospy.loginfo("[SCAN START] Starting 360° light scan...")
+            rospy.loginfo(f"[SCAN START] initial_yaw={np.degrees(self.current_yaw):.1f}°")
             self.scan_start_yaw = self.current_yaw
             self.scan_last_yaw = self.current_yaw
             self.scan_accumulated_rotation = 0.0
             self.brightness_log = []
             self.scan_start_time = rospy.Time.now()
+            self._debug_yaw_samples = []
+            self._debug_scan_cmd_gaps = []
+            self._debug_cmd_count = 0
 
         brightness = self.get_brightness()
 
@@ -451,19 +477,43 @@ class BOTanicaBrain:
         # Track rotation - count absolute rotation
         delta = self.angle_diff(self.current_yaw, self.scan_last_yaw)
         self.scan_accumulated_rotation += abs(delta)
-        self.scan_last_yaw = self.current_yaw
 
-        # Debug log
-        rospy.loginfo_throttle(1, f"SCAN: accumulated={np.degrees(self.scan_accumulated_rotation):.1f}° current_yaw={np.degrees(self.current_yaw):.1f}°")
+        # === DEBUG: Sample yaw for analysis ===
+        self._debug_yaw_samples.append((time.time(), self.current_yaw, delta))
+
+        # === DEBUG: Detect if yaw is stuck ===
+        if len(self._debug_yaw_samples) > 10:
+            recent_deltas = [abs(s[2]) for s in self._debug_yaw_samples[-10:]]
+            if all(d < 0.001 for d in recent_deltas):
+                rospy.logwarn(f"[SCAN STUCK?] Yaw hasn't changed in 10 samples! yaw={np.degrees(self.current_yaw):.1f}°")
+
+        self.scan_last_yaw = self.current_yaw
 
         # Require at least 6 seconds of scanning AND 330 degrees of rotation
         scan_duration = (rospy.Time.now() - self.scan_start_time).to_sec()
-        if self.scan_accumulated_rotation < 5.76 or scan_duration < 6.0:  # 5.76 rad = 330 degrees
+        target_rotation_deg = 330
+        target_rotation_rad = 5.76  # 330 degrees in radians
+
+        # === DEBUG: Detailed progress log ===
+        progress_pct = min(100, (self.scan_accumulated_rotation / target_rotation_rad) * 100)
+        status_msg = f"accumulated={np.degrees(self.scan_accumulated_rotation):.1f}°/{target_rotation_deg}° ({progress_pct:.0f}%) yaw={np.degrees(self.current_yaw):.1f}° duration={scan_duration:.1f}s cmds={self._debug_cmd_count}"
+        rospy.loginfo_throttle(1, f"[SCAN] {status_msg}")
+        self.debug_scan_pub.publish(String(data=status_msg))
+
+        if self.scan_accumulated_rotation < target_rotation_rad or scan_duration < 6.0:
             # Keep rotating
             self.publish_direct_cmd(angular_z=0.25)
         else:
             # Scan complete
             self.stop()
+            rospy.loginfo("=" * 50)
+            rospy.loginfo(f"[SCAN COMPLETE] total_rotation={np.degrees(self.scan_accumulated_rotation):.1f}° duration={scan_duration:.1f}s")
+            rospy.loginfo(f"[SCAN COMPLETE] start_yaw={np.degrees(self.scan_start_yaw):.1f}° end_yaw={np.degrees(self.current_yaw):.1f}°")
+            rospy.loginfo(f"[SCAN COMPLETE] total_cmds={self._debug_cmd_count} samples={len(self._debug_yaw_samples)}")
+            if self._debug_scan_cmd_gaps:
+                rospy.logwarn(f"[SCAN COMPLETE] cmd_gaps>{300}ms: {len(self._debug_scan_cmd_gaps)} (max={max(self._debug_scan_cmd_gaps)*1000:.0f}ms)")
+            rospy.loginfo("=" * 50)
+
             bright_angles = [b for _, b in self.brightness_log if b > self.BRIGHTNESS_SCAN_THRESHOLD]
             rospy.loginfo(f"Scan complete. Bright angles: {len(bright_angles)}/{len(self.brightness_log)}")
 
