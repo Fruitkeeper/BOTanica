@@ -113,21 +113,24 @@ class RoboMasterDriver:
 
             if is_turning and not was_turning:
                 # Turn just started
-                self._turn_start_yaw = self._current_yaw
+                self._turn_start_yaw = self._current_yaw if self._current_yaw is not None else 0.0
                 self._turn_accumulated = 0.0
-                self._turn_last_yaw = self._current_yaw
+                self._turn_last_yaw = self._current_yaw if self._current_yaw is not None else 0.0
                 self._turn_cmd_count = 0
-                rospy.loginfo(f"[TURN START] yaw={self._current_yaw:.2f}° angular_cmd={angular_deg:.2f}°/s")
+                yaw_str = f"{self._current_yaw:.2f}" if self._current_yaw is not None else "N/A"
+                rospy.loginfo(f"[TURN START] yaw={yaw_str}° angular_cmd={angular_deg:.2f}°/s")
 
             if is_turning:
                 self._turn_cmd_count += 1
                 # Log every 10th command to avoid spam
                 if self._turn_cmd_count % 10 == 0:
-                    rospy.loginfo(f"[TURN] cmd#{self._turn_cmd_count} yaw={self._current_yaw:.2f}° accumulated={self._turn_accumulated:.2f}° angular_cmd={angular_deg:.2f}°/s")
+                    yaw_str = f"{self._current_yaw:.2f}" if self._current_yaw is not None else "N/A"
+                    rospy.loginfo(f"[TURN] cmd#{self._turn_cmd_count} yaw={yaw_str}° accumulated={self._turn_accumulated:.2f}° angular_cmd={angular_deg:.2f}°/s")
 
             if was_turning and not is_turning:
                 # Turn just ended
-                rospy.loginfo(f"[TURN END] start_yaw={self._turn_start_yaw:.2f}° end_yaw={self._current_yaw:.2f}° accumulated={self._turn_accumulated:.2f}° total_cmds={self._turn_cmd_count}")
+                if self._turn_start_yaw is not None:
+                    rospy.loginfo(f"[TURN END] start_yaw={self._turn_start_yaw:.2f}° end_yaw={self._current_yaw:.2f}° accumulated={self._turn_accumulated:.2f}° total_cmds={self._turn_cmd_count}")
                 self._turn_start_yaw = None
 
             if not is_turning:
@@ -141,7 +144,8 @@ class RoboMasterDriver:
             now = time.time()
             if now - self._last_debug_time > 2.0:
                 self._last_debug_time = now
-                status = f"cmds={self._cmd_received_count} yaw={self._current_yaw:.1f}° timeouts={self._turn_timeout_count}"
+                yaw_str = f"{self._current_yaw:.1f}" if self._current_yaw is not None else "N/A"
+                status = f"cmds={self._cmd_received_count} yaw={yaw_str}° timeouts={self._turn_timeout_count}"
                 rospy.loginfo(f"[DRIVER STATUS] {status}")
                 self._debug_turn_pub.publish(String(data=status))
 

@@ -141,6 +141,7 @@ class BOTanicaBrain:
         self.current_pose = None       # (x, y, yaw) from OptiTrack
         self.current_yaw = 0.0         # Yaw from OptiTrack (for navigation)
         self.odom_yaw = 0.0            # Yaw from robot odometry (for light seeking)
+        self.odom_pos = (0.0, 0.0)     # Position from robot odometry (for light seeking)
 
         # Light-seeking state
         self.scan_start_yaw = None
@@ -223,11 +224,13 @@ class BOTanicaBrain:
         self.current_yaw = yaw
 
     def odom_callback(self, msg):
-        """Odometry from RoboMaster - always update odom_yaw for light seeking"""
+        """Odometry from RoboMaster - always update odom for light seeking"""
         orient = msg.pose.pose.orientation
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
         self.odom_yaw = yaw  # Always track robot's own yaw for light seeking
-        # Only use for position if no OptiTrack pose
+        pos = msg.pose.pose.position
+        self.odom_pos = (pos.x, pos.y)  # Always track robot's own position for light seeking
+        # Only use for current_pose if no OptiTrack pose
         if self.current_pose is None:
             pos = msg.pose.pose.position
             self.current_pose = (pos.x, pos.y, yaw)
@@ -561,8 +564,8 @@ class BOTanicaBrain:
         else:
             self.stop()
             rospy.loginfo("Aligned. Moving toward light.")
-            if self.current_pose:
-                self.move_start_pos = (self.current_pose[0], self.current_pose[1])
+            # Use odometry position for light seeking distance tracking
+            self.move_start_pos = self.odom_pos
             self.bright_counter = 0
             self.state = State.LIGHT_MOVE
 
@@ -571,13 +574,14 @@ class BOTanicaBrain:
         if self.nav_mode != NavigationMode.DIRECT:
             self.set_nav_mode(NavigationMode.DIRECT)
 
-        if self.move_start_pos is None or self.current_pose is None:
+        if self.move_start_pos is None:
             self.state = State.LIGHT_SCAN
             self.reset_light_seeking()
             return
 
-        dist = np.hypot(self.current_pose[0] - self.move_start_pos[0],
-                        self.current_pose[1] - self.move_start_pos[1])
+        # Use odometry position for distance tracking
+        dist = np.hypot(self.odom_pos[0] - self.move_start_pos[0],
+                        self.odom_pos[1] - self.move_start_pos[1])
 
         brightness = self.get_brightness()
 
