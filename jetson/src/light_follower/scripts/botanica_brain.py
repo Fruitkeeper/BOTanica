@@ -18,7 +18,7 @@ import numpy as np
 from datetime import datetime
 from enum import Enum
 
-from sensor_msgs.msg import Image, BatteryState
+from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist, PoseStamped, Point32
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, String, Float32
@@ -205,7 +205,7 @@ class BOTanicaBrain:
 
         # === SUBSCRIBERS ===
         # Battery from RoboMaster via Pi
-        rospy.Subscriber("/battery", BatteryState, self.battery_callback)
+        rospy.Subscriber("/battery_level", Float32, self.battery_callback)
 
         # Soil moisture from BLE sensor
         rospy.Subscriber("/sensor_data", SensorData, self.sensor_callback)
@@ -237,7 +237,7 @@ class BOTanicaBrain:
     # === CALLBACKS ===
 
     def battery_callback(self, msg):
-        self.battery_percent = msg.percentage  # 0.0 - 1.0
+        self.battery_percent = msg.data  # 0.0 - 1.0
 
     def sensor_callback(self, msg):
         self.soil_moisture = msg.moisture  # 0-100%

@@ -2,7 +2,7 @@
 import rospy
 from robomaster import robot, config
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Image, Imu, JointState, BatteryState
+from sensor_msgs.msg import Image, Imu, JointState
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, String
 from threading import Thread
@@ -47,7 +47,7 @@ class RoboMasterDriver:
         self._odom_pub = rospy.Publisher("odom", Odometry, queue_size=3)
         self._imu_pub = rospy.Publisher("imu/data", Imu, queue_size=3)
         self._joint_pub = rospy.Publisher("joint_states", JointState, queue_size=3)
-        self._battery_pub = rospy.Publisher("battery", BatteryState, queue_size=3)
+        self._battery_pub = rospy.Publisher("battery_level", Float32, queue_size=3)
 
         # === DEBUG publishers ===
         self._debug_yaw_pub = rospy.Publisher("debug/yaw", Float32, queue_size=3)
@@ -275,14 +275,9 @@ class RoboMasterDriver:
 
     def _battery_callback(self, data):
         """Battery info handler from RoboMaster"""
-        rospy.loginfo_throttle(10, f"[BATTERY RAW] data={data} type={type(data)}")
         percent = data
-        msg = BatteryState()
-        msg.header.stamp = rospy.Time.now()
-        msg.header.frame_id = "base_link"
-        msg.percentage = float(percent) / 100.0  # BatteryState uses 0.0-1.0
-        msg.present = True
-        self._battery_pub.publish(msg)
+        rospy.loginfo_throttle(10, f"[BATTERY] {percent}%")
+        self._battery_pub.publish(Float32(data=float(percent) / 100.0))
 
     def shutdown(self):
         """Clean shutdown"""
