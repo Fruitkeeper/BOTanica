@@ -73,9 +73,12 @@ class RoboMasterDriver:
             robot_ip = rospy.get_param("~robot_ip", "")
 
             if conn_mode == "WIFI":
+                local_ip = rospy.get_param("~local_ip", "")
                 if robot_ip:
-                    # Direct connection to known IP
                     config.ROBOT_IP_STR = robot_ip
+                if local_ip:
+                    config.LOCAL_IP_STR = local_ip
+                    rospy.loginfo(f"Using local IP: {local_ip}")
                 self._robot.initialize(conn_type="sta")
             elif conn_mode == "USB":
                 self._robot.initialize(conn_type="rndis")
