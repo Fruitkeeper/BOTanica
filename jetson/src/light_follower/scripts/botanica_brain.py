@@ -36,6 +36,22 @@ def imgmsg_to_cv2(img_msg, desired_encoding="bgr8"):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
 
+def depth_imgmsg_to_cv2(img_msg):
+    """Convert ROS depth Image message to numpy array (in meters)"""
+    # Depth is typically 16UC1 (16-bit unsigned, single channel) in millimeters
+    if img_msg.encoding == "16UC1":
+        dtype = np.uint16
+        img = np.frombuffer(img_msg.data, dtype=dtype).reshape(img_msg.height, img_msg.width)
+        # Convert from mm to meters
+        return img.astype(np.float32) / 1000.0
+    elif img_msg.encoding == "32FC1":
+        dtype = np.float32
+        img = np.frombuffer(img_msg.data, dtype=dtype).reshape(img_msg.height, img_msg.width)
+        return img
+    else:
+        rospy.logwarn(f"Unknown depth encoding: {img_msg.encoding}")
+        return None
+
 def euler_from_quaternion(q):
     """Convert quaternion [x, y, z, w] to euler angles [roll, pitch, yaw]"""
     x, y, z, w = q
@@ -105,6 +121,11 @@ class BOTanicaBrain:
     LIGHT_MOVE_SPEED = 0.1
     BRIGHT_CONFIRM_COUNT = 3
 
+    # Obstacle avoidance parameters
+    OBSTACLE_STOP_DISTANCE = 0.4           # meters - stop if obstacle closer than this
+    OBSTACLE_SLOW_DISTANCE = 0.8           # meters - slow down if obstacle closer than this
+    OBSTACLE_CHECK_WIDTH = 0.3             # fraction of image width to check (center 30%)
+
     # Dosing duration
     DEFAULT_DOSE_DURATION = 5.0            # seconds to "water"
 
@@ -136,6 +157,8 @@ class BOTanicaBrain:
         self.battery_percent = 1.0     # Start assuming full
         self.soil_moisture = 100       # Start assuming watered
         self.image = None
+        self.depth_image = None        # Depth image for obstacle avoidance
+        self.min_obstacle_dist = float('inf')  # Minimum distance to obstacle
 
         # Position data
         self.current_pose = None       # (x, y, yaw) from OptiTrack
@@ -193,10 +216,14 @@ class BOTanicaBrain:
         # Camera for light detection
         rospy.Subscriber("/camera/color/image_raw", Image, self.image_callback)
 
+        # Depth camera for obstacle avoidance
+        rospy.Subscriber("/camera/depth/image_rect_raw", Image, self.depth_callback)
+
         # Odometry as backup / for yaw
         rospy.Subscriber("/odom", Odometry, self.odom_callback)
 
         rospy.loginfo("BOTanica Brain initialized")
+        rospy.loginfo(f"  Obstacle stop distance: {self.OBSTACLE_STOP_DISTANCE}m")
         rospy.loginfo(f"  Battery threshold: {self.BATTERY_LOW_THRESHOLD*100}%")
         rospy.loginfo(f"  Moisture threshold: {self.MOISTURE_LOW_THRESHOLD}%")
         rospy.loginfo(f"  Day hours: {self.DAY_START_HOUR}:00 - {self.DAY_END_HOUR}:00")
@@ -241,6 +268,44 @@ class BOTanicaBrain:
             self.image = imgmsg_to_cv2(msg, "bgr8")
         except Exception as e:
             rospy.logerr(f"Image error: {e}")
+
+    def depth_callback(self, msg):
+        """Process depth image for obstacle detection"""
+        try:
+            depth = depth_imgmsg_to_cv2(msg)
+            if depth is not None:
+                self.depth_image = depth
+                # Calculate minimum distance in center region of image
+                self.min_obstacle_dist = self.get_min_obstacle_distance(depth)
+        except Exception as e:
+            rospy.logerr(f"Depth error: {e}")
+
+    def get_min_obstacle_distance(self, depth):
+        """Get minimum distance to obstacle in the center region of the depth image"""
+        if depth is None:
+            return float('inf')
+
+        h, w = depth.shape
+        # Check center portion of image (defined by OBSTACLE_CHECK_WIDTH)
+        margin = int(w * (1 - self.OBSTACLE_CHECK_WIDTH) / 2)
+        center_region = depth[:, margin:w-margin]
+
+        # Filter out invalid readings (0 or very large values)
+        valid_depths = center_region[(center_region > 0.1) & (center_region < 10.0)]
+
+        if len(valid_depths) == 0:
+            return float('inf')
+
+        # Return minimum distance (closest obstacle)
+        return np.min(valid_depths)
+
+    def is_obstacle_ahead(self):
+        """Check if there's an obstacle too close ahead"""
+        return self.min_obstacle_dist < self.OBSTACLE_STOP_DISTANCE
+
+    def should_slow_down(self):
+        """Check if we should slow down due to nearby obstacle"""
+        return self.min_obstacle_dist < self.OBSTACLE_SLOW_DISTANCE
 
     # === UTILITY FUNCTIONS ===
 
@@ -598,8 +663,25 @@ class BOTanicaBrain:
             self.bright_counter = 0
 
         if dist < 1.0:
-            rospy.loginfo_throttle(2, f"[MOVE] dist={dist:.2f}m brightness={brightness:.0f} moving forward at {self.LIGHT_MOVE_SPEED} m/s")
-            self.publish_direct_cmd(linear_x=self.LIGHT_MOVE_SPEED)
+            # === OBSTACLE AVOIDANCE ===
+            if self.is_obstacle_ahead():
+                # Obstacle too close - stop and rescan
+                rospy.logwarn(f"[OBSTACLE] Obstacle detected at {self.min_obstacle_dist:.2f}m! Stopping and rescanning.")
+                self.stop()
+                self.state = State.LIGHT_SCAN
+                self.reset_light_seeking()
+                return
+
+            # Determine speed based on obstacle distance
+            if self.should_slow_down():
+                # Slow down when approaching obstacle
+                speed = self.LIGHT_MOVE_SPEED * 0.5
+                rospy.loginfo_throttle(2, f"[MOVE] dist={dist:.2f}m obstacle={self.min_obstacle_dist:.2f}m SLOWING to {speed} m/s")
+            else:
+                speed = self.LIGHT_MOVE_SPEED
+                rospy.loginfo_throttle(2, f"[MOVE] dist={dist:.2f}m obstacle={self.min_obstacle_dist:.2f}m brightness={brightness:.0f} moving at {speed} m/s")
+
+            self.publish_direct_cmd(linear_x=speed)
         else:
             rospy.loginfo("Moved 1m. Rescanning.")
             self.stop()

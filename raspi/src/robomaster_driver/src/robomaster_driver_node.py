@@ -272,6 +272,7 @@ class RoboMasterDriver:
 
     def _battery_callback(self, data):
         """Battery info handler from RoboMaster"""
+        rospy.loginfo_throttle(10, f"[BATTERY RAW] data={data} type={type(data)}")
         percent = data
         msg = BatteryState()
         msg.header.stamp = rospy.Time.now()
