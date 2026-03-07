@@ -112,7 +112,8 @@ class RoboMasterDriver:
             self._cmd_received_count += 1
 
             # Convert angular velocity from rad/s to deg/s
-            angular_deg = msg.angular.z * 180.0 / np.pi
+            # Negate because RoboMaster SDK uses CW-positive, ROS uses CCW-positive
+            angular_deg = -msg.angular.z * 180.0 / np.pi
 
             # === DEBUG: Track turn commands ===
             is_turning = abs(msg.angular.z) > 0.01
@@ -173,7 +174,8 @@ class RoboMasterDriver:
 
         # === DEBUG: Track yaw changes during turn ===
         old_yaw = self._current_yaw
-        self._current_yaw = yaw
+        # Negate because RoboMaster SDK uses CW-positive, ROS uses CCW-positive
+        self._current_yaw = -yaw
 
         # Publish debug yaw
         self._debug_yaw_pub.publish(Float32(data=yaw))

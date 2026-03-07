@@ -223,7 +223,8 @@ class BOTanicaBrain:
         os.makedirs(self.memory_dir, exist_ok=True)
         self.sunspot_memory = []
         self.current_sunspot = None
-        self.load_memory()
+        # Disabled: sunspot memory not useful until robot can stay 30+ min
+        # self.load_memory()
 
         # Sunbathing state
         self.sunbathing_drop_counter = 0
@@ -477,15 +478,9 @@ class BOTanicaBrain:
             rospy.logwarn(f"[MEMORY] Failed to load memory: {e}")
 
     def save_memory(self):
-        """Persist sunspot memory to disk."""
-        path = os.path.join(self.memory_dir, self.MEMORY_FILE)
-        try:
-            data = {'sunspots': self.sunspot_memory}
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=2)
-            rospy.loginfo(f"[MEMORY] Saved {len(self.sunspot_memory)} sunspots to disk.")
-        except Exception as e:
-            rospy.logwarn(f"[MEMORY] Failed to save memory: {e}")
+        """Persist sunspot memory to disk. Disabled until robot can stay 30+ min."""
+        rospy.loginfo("[MEMORY] Save disabled (memory loading disabled).")
+        return
 
     # === UTILITY FUNCTIONS ===
 
