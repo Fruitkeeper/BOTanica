@@ -130,8 +130,8 @@ class BOTanicaBrain:
     BRIGHT_CONFIRM_COUNT = 3
 
     # Obstacle avoidance parameters
-    OBSTACLE_STOP_DISTANCE = 0.4           # meters - stop if obstacle closer than this
-    OBSTACLE_SLOW_DISTANCE = 0.8           # meters - slow down if obstacle closer than this
+    OBSTACLE_STOP_DISTANCE = 0.25          # meters - stop if obstacle closer than this
+    OBSTACLE_SLOW_DISTANCE = 0.5           # meters - slow down if obstacle closer than this
     OBSTACLE_CHECK_WIDTH = 0.3             # fraction of image width to check (center 30%)
 
     # Dosing duration
@@ -323,29 +323,26 @@ class BOTanicaBrain:
         self.optitrack_pose = (pos.x, pos.y, yaw)
 
         # Estimate yaw offset between odom and world frames from movement direction
+        # The puck is offset from center of rotation, so turning in place produces
+        # false movement. Only calibrate from straight-line driving (>15cm movement)
+        # and freeze after initial calibration (the offset between frames is constant).
         xy = (pos.x, pos.y)
         if self._prev_optitrack_xy is not None:
-            dx = xy[0] - self._prev_optitrack_xy[0]
-            dy = xy[1] - self._prev_optitrack_xy[1]
-            moved = math.hypot(dx, dy)
-            # Only update when robot has moved enough for a reliable bearing
-            if moved > 0.08:
-                world_bearing = math.atan2(dy, dx)
-                # Use average of odom_yaw at start and end of movement segment
-                # world_bearing ≈ odom_yaw_mid + offset
-                half_diff = self.angle_diff(self.odom_yaw, self._prev_odom_yaw_at_sample) / 2.0
-                odom_yaw_mid = self._prev_odom_yaw_at_sample + half_diff
-                new_offset = self.angle_diff(world_bearing, odom_yaw_mid)
-                if self.yaw_offset is None:
-                    self.yaw_offset = new_offset
-                    rospy.loginfo(f"[YAW OFFSET] Initial calibration: {np.degrees(new_offset):.1f}°")
-                else:
-                    # Low-pass filter to smooth out noise
-                    alpha = 0.3
-                    diff = self.angle_diff(new_offset, self.yaw_offset)
-                    self.yaw_offset = self.yaw_offset + alpha * diff
-                self._prev_optitrack_xy = xy
-                self._prev_odom_yaw_at_sample = self.odom_yaw
+            if self.yaw_offset is None:
+                dx = xy[0] - self._prev_optitrack_xy[0]
+                dy = xy[1] - self._prev_optitrack_xy[1]
+                moved = math.hypot(dx, dy)
+                if moved > 0.15:
+                    world_bearing = math.atan2(dy, dx)
+                    # odom_yaw at midpoint of movement segment
+                    half_diff = self.angle_diff(self.odom_yaw, self._prev_odom_yaw_at_sample) / 2.0
+                    odom_yaw_mid = self._prev_odom_yaw_at_sample + half_diff
+                    self.yaw_offset = self.angle_diff(world_bearing, odom_yaw_mid)
+                    rospy.loginfo(f"[YAW OFFSET] Calibrated: {np.degrees(self.yaw_offset):.1f}° "
+                                  f"(world_bearing={np.degrees(world_bearing):.1f}° odom_mid={np.degrees(odom_yaw_mid):.1f}°)")
+                    self._prev_optitrack_xy = xy
+                    self._prev_odom_yaw_at_sample = self.odom_yaw
+            # Once calibrated, don't update — the offset is constant
         else:
             self._prev_optitrack_xy = xy
             self._prev_odom_yaw_at_sample = self.odom_yaw
@@ -423,9 +420,12 @@ class BOTanicaBrain:
             return float('inf')
 
         h, w = depth.shape
-        # Check center portion of image (defined by OBSTACLE_CHECK_WIDTH)
+        # Check center portion of image (horizontally and vertically)
+        # Vertical: use middle 60% to avoid floor and ceiling
+        v_margin = int(h * 0.2)
+        # Horizontal: use center region defined by OBSTACLE_CHECK_WIDTH
         margin = int(w * (1 - self.OBSTACLE_CHECK_WIDTH) / 2)
-        center_region = depth[:, margin:w-margin]
+        center_region = depth[v_margin:h-v_margin, margin:w-margin]
 
         # Filter out invalid readings (0 or very large values)
         valid_depths = center_region[(center_region > 0.1) & (center_region < 10.0)]
@@ -677,7 +677,7 @@ class BOTanicaBrain:
         if self.yaw_offset is None:
             # Drive forward slowly to bootstrap yaw offset calibration from OptiTrack movement
             rospy.logwarn_throttle(3, "[NAV] Calibrating yaw offset... creeping forward")
-            self.publish_direct_cmd(linear_x=0.08, angular_z=0.0)
+            self.publish_direct_cmd(linear_x=0.10, angular_z=0.0)
             return
 
         dx = self.nav_target[0] - self.optitrack_pose[0]
@@ -814,6 +814,9 @@ class BOTanicaBrain:
 
     def do_go_to_dock(self):
         """Navigate to dock using direct proportional control"""
+        # Ensure nav target is dock (guards against race with other state handlers)
+        if self.nav_target is None or self.nav_target != self.DOCK_COORDS:
+            self.start_gvf_navigation(self.DOCK_COORDS)
         if self.check_arrival():
             rospy.loginfo("Arrived at dock. Charging...")
             self.publish_event("nav_arrival", {"station": "dock"})
@@ -842,6 +845,9 @@ class BOTanicaBrain:
 
     def do_go_to_water(self):
         """Navigate to water station using direct proportional control"""
+        # Ensure nav target is water station (guards against race with other state handlers)
+        if self.nav_target is None or self.nav_target != self.WATER_COORDS:
+            self.start_gvf_navigation(self.WATER_COORDS)
         if self.check_arrival():
             rospy.loginfo("Arrived at water station. Dosing...")
             self.publish_event("nav_arrival", {"station": "water"})
