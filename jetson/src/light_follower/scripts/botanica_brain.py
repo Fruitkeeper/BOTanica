@@ -120,7 +120,8 @@ class BOTanicaBrain:
     OPTITRACK_FRAME = "world"  # OptiTrack world frame
 
     # Navigation parameters
-    DEFAULT_ARRIVAL_TOLERANCE = 0.15       # meters - how close to be "arrived"
+    DEFAULT_ARRIVAL_TOLERANCE = 0.15       # meters - how close to be "arrived" (sunspots)
+    DOCK_ARRIVAL_TOLERANCE = 0.15          # meters - dock is a square, more forgiving
 
     # Light-seeking parameters
     BRIGHTNESS_SCAN_THRESHOLD = 150
@@ -706,13 +707,15 @@ class BOTanicaBrain:
             speed = min(self.NAV_LINEAR_SPEED, self.NAV_LINEAR_SPEED * dist / 0.5)
             speed = max(speed, 0.05)  # minimum creep speed
 
-            # Obstacle check during navigation
-            if self.is_obstacle_ahead():
-                rospy.logwarn(f"[NAV] Obstacle at {self.min_obstacle_dist:.2f}m! Stopping.")
-                self.publish_direct_cmd(0, 0, 0)
-                return
-            elif self.should_slow_down():
-                speed *= 0.5
+            # Obstacle check only during light-seeking (GO_TO_SUNSPOT), not dock/water
+            # The RealSense is unreliable (USB errors) and dock/water paths are known clear
+            if self.state not in (State.GO_TO_DOCK, State.GO_TO_WATER):
+                if self.is_obstacle_ahead():
+                    rospy.logwarn(f"[NAV] Obstacle at {self.min_obstacle_dist:.2f}m! Stopping.")
+                    self.publish_direct_cmd(0, 0, 0)
+                    return
+                elif self.should_slow_down():
+                    speed *= 0.5
 
             self.publish_direct_cmd(linear_x=speed, angular_z=angular_cmd)
             rospy.loginfo_throttle(2, f"[NAV] DRIVING dist={dist:.2f}m heading_err={np.degrees(heading_error):.1f}° speed={speed:.2f}")
@@ -812,7 +815,7 @@ class BOTanicaBrain:
         # Ensure nav target is dock (guards against race with other state handlers)
         if self.nav_target is None or self.nav_target != self.DOCK_COORDS:
             self.start_gvf_navigation(self.DOCK_COORDS)
-        if self.check_arrival():
+        if self.distance_to_optitrack(self.DOCK_COORDS) < self.DOCK_ARRIVAL_TOLERANCE:
             rospy.loginfo("Arrived at dock. Charging...")
             self.publish_event("nav_arrival", {"station": "dock"})
             self.stop_gvf_navigation()
@@ -843,7 +846,7 @@ class BOTanicaBrain:
         # Ensure nav target is water station (guards against race with other state handlers)
         if self.nav_target is None or self.nav_target != self.WATER_COORDS:
             self.start_gvf_navigation(self.WATER_COORDS)
-        if self.check_arrival():
+        if self.distance_to_optitrack(self.WATER_COORDS) < self.DOCK_ARRIVAL_TOLERANCE:
             rospy.loginfo("Arrived at water station. Dosing...")
             self.publish_event("nav_arrival", {"station": "water"})
             self.stop_gvf_navigation()
