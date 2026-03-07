@@ -188,6 +188,12 @@ class BOTanicaBrain:
         self.odom_yaw = 0.0            # Yaw from robot odometry (for light seeking)
         self.odom_pos = (0.0, 0.0)     # Position from robot odometry (for light seeking)
 
+        # Frame alignment: offset from odom yaw to world yaw
+        # world_yaw = odom_yaw + yaw_offset
+        self.yaw_offset = None         # Estimated once robot moves enough
+        self._prev_optitrack_xy = None # Previous OptiTrack position for bearing estimation
+        self._prev_odom_yaw_at_sample = None  # odom_yaw when prev position was recorded
+
         # Light-seeking state
         self.scan_start_yaw = None
         self.scan_last_yaw = None
@@ -315,6 +321,34 @@ class BOTanicaBrain:
         orient = msg.pose.orientation
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
         self.optitrack_pose = (pos.x, pos.y, yaw)
+
+        # Estimate yaw offset between odom and world frames from movement direction
+        xy = (pos.x, pos.y)
+        if self._prev_optitrack_xy is not None:
+            dx = xy[0] - self._prev_optitrack_xy[0]
+            dy = xy[1] - self._prev_optitrack_xy[1]
+            moved = math.hypot(dx, dy)
+            # Only update when robot has moved enough for a reliable bearing
+            if moved > 0.08:
+                world_bearing = math.atan2(dy, dx)
+                # Use average of odom_yaw at start and end of movement segment
+                # world_bearing ≈ odom_yaw_mid + offset
+                half_diff = self.angle_diff(self.odom_yaw, self._prev_odom_yaw_at_sample) / 2.0
+                odom_yaw_mid = self._prev_odom_yaw_at_sample + half_diff
+                new_offset = self.angle_diff(world_bearing, odom_yaw_mid)
+                if self.yaw_offset is None:
+                    self.yaw_offset = new_offset
+                    rospy.loginfo(f"[YAW OFFSET] Initial calibration: {np.degrees(new_offset):.1f}°")
+                else:
+                    # Low-pass filter to smooth out noise
+                    alpha = 0.3
+                    diff = self.angle_diff(new_offset, self.yaw_offset)
+                    self.yaw_offset = self.yaw_offset + alpha * diff
+                self._prev_optitrack_xy = xy
+                self._prev_odom_yaw_at_sample = self.odom_yaw
+        else:
+            self._prev_optitrack_xy = xy
+            self._prev_odom_yaw_at_sample = self.odom_yaw
 
     def odom_callback(self, msg):
         """Odometry from RoboMaster — used ONLY for light-seeking (scan/align/move)"""
@@ -640,14 +674,22 @@ class BOTanicaBrain:
         if self.nav_target is None or self.optitrack_pose is None:
             return
 
+        if self.yaw_offset is None:
+            # Drive forward slowly to bootstrap yaw offset calibration from OptiTrack movement
+            rospy.logwarn_throttle(3, "[NAV] Calibrating yaw offset... creeping forward")
+            self.publish_direct_cmd(linear_x=0.08, angular_z=0.0)
+            return
+
         dx = self.nav_target[0] - self.optitrack_pose[0]
         dy = self.nav_target[1] - self.optitrack_pose[1]
         dist = math.hypot(dx, dy)
 
-        # Desired heading toward target (position from OptiTrack, yaw from odom IMU)
+        # Desired heading toward target (in world frame)
         desired_yaw = math.atan2(dy, dx)
-        current_yaw = self.odom_yaw
+        # Convert odom yaw to world frame using calibrated offset
+        current_yaw = self.odom_yaw + self.yaw_offset
         heading_error = self.angle_diff(desired_yaw, current_yaw)
+        rospy.loginfo_throttle(5, f"[NAV] yaw_offset={np.degrees(self.yaw_offset):.1f}° odom_yaw={np.degrees(self.odom_yaw):.1f}° world_yaw={np.degrees(current_yaw):.1f}° desired={np.degrees(desired_yaw):.1f}°")
 
         # Proportional angular correction
         # When heading error is large (>90°), commit to turning one direction
