@@ -644,9 +644,9 @@ class BOTanicaBrain:
         dy = self.nav_target[1] - self.optitrack_pose[1]
         dist = math.hypot(dx, dy)
 
-        # Desired heading toward target
+        # Desired heading toward target (position from OptiTrack, yaw from odom IMU)
         desired_yaw = math.atan2(dy, dx)
-        current_yaw = self.optitrack_pose[2]
+        current_yaw = self.odom_yaw
         heading_error = self.angle_diff(desired_yaw, current_yaw)
 
         # Proportional angular correction
