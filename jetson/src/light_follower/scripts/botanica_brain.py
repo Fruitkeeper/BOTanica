@@ -609,48 +609,71 @@ class BOTanicaBrain:
         """Stop all movement"""
         self.publish_direct_cmd(0, 0, 0)
 
+    # Waypoint navigation parameters
+    NAV_LINEAR_SPEED = 0.15        # m/s cruise speed toward waypoint
+    NAV_ANGULAR_GAIN = 1.5         # proportional gain for heading correction
+    NAV_MAX_ANGULAR = 0.5          # rad/s max turning speed
+    NAV_ALIGN_THRESHOLD = 0.3      # rad — align first if heading error exceeds this
+
     def start_gvf_navigation(self, target):
         """
-        Start GVF navigation to target waypoint (in OptiTrack frame).
-        Requires OptiTrack pose — refuses to start without it.
+        Start direct waypoint navigation to target (in OptiTrack frame).
+        Uses proportional control with OptiTrack feedback.
         """
         if self.optitrack_pose is None:
-            rospy.logwarn("Cannot start GVF navigation: no OptiTrack pose available")
+            rospy.logwarn("Cannot start navigation: no OptiTrack pose available")
             return False
 
         self.nav_target = target
-        self.set_nav_mode(NavigationMode.GVF)
-
-        # Create path message for vectorfield_stack
-        path_msg = GVFPath()
-        path_msg.header.stamp = rospy.Time.now()
-        path_msg.header.frame_id = self.OPTITRACK_FRAME
-
-        # Path: current OptiTrack position -> target (both in OptiTrack frame)
-        start_point = Point32()
-        start_point.x = self.optitrack_pose[0]
-        start_point.y = self.optitrack_pose[1]
-        start_point.z = 0.0
-
-        end_point = Point32()
-        end_point.x = target[0]
-        end_point.y = target[1]
-        end_point.z = 0.0
-
-        path_msg.path.points = [start_point, end_point]
-        path_msg.closed_path_flag = False
-        path_msg.insert_n_points = 10      # Interpolate for smoother path
-        path_msg.filter_path_n_average = 3  # Smooth the path
-
-        self.path_pub.publish(path_msg)
         self.gvf_active = True
+        self.set_nav_mode(NavigationMode.DIRECT)
 
-        rospy.loginfo(f"GVF navigation started: ({self.optitrack_pose[0]:.2f}, {self.optitrack_pose[1]:.2f}) -> ({target[0]:.2f}, {target[1]:.2f})")
+        rospy.loginfo(f"Navigation started: ({self.optitrack_pose[0]:.2f}, {self.optitrack_pose[1]:.2f}) -> ({target[0]:.2f}, {target[1]:.2f})")
         self.publish_event("nav_goal", {
             "from": [round(self.optitrack_pose[0], 3), round(self.optitrack_pose[1], 3)],
             "to": [round(target[0], 3), round(target[1], 3)],
         })
         return True
+
+    def navigate_to_target(self):
+        """Called each update cycle to drive toward nav_target using OptiTrack pose."""
+        if self.nav_target is None or self.optitrack_pose is None:
+            return
+
+        dx = self.nav_target[0] - self.optitrack_pose[0]
+        dy = self.nav_target[1] - self.optitrack_pose[1]
+        dist = math.hypot(dx, dy)
+
+        # Desired heading toward target
+        desired_yaw = math.atan2(dy, dx)
+        current_yaw = self.optitrack_pose[2]
+        heading_error = self.angle_diff(desired_yaw, current_yaw)
+
+        # Proportional angular correction
+        angular_cmd = np.clip(self.NAV_ANGULAR_GAIN * heading_error,
+                              -self.NAV_MAX_ANGULAR, self.NAV_MAX_ANGULAR)
+
+        # Only drive forward when roughly pointing at the target
+        if abs(heading_error) > self.NAV_ALIGN_THRESHOLD:
+            # Turn in place first
+            self.publish_direct_cmd(linear_x=0.0, angular_z=angular_cmd)
+            rospy.loginfo_throttle(2, f"[NAV] ALIGNING dist={dist:.2f}m heading_err={np.degrees(heading_error):.1f}°")
+        else:
+            # Drive forward with heading correction
+            # Slow down as we approach
+            speed = min(self.NAV_LINEAR_SPEED, self.NAV_LINEAR_SPEED * dist / 0.5)
+            speed = max(speed, 0.05)  # minimum creep speed
+
+            # Obstacle check during navigation
+            if self.is_obstacle_ahead():
+                rospy.logwarn(f"[NAV] Obstacle at {self.min_obstacle_dist:.2f}m! Stopping.")
+                self.publish_direct_cmd(0, 0, 0)
+                return
+            elif self.should_slow_down():
+                speed *= 0.5
+
+            self.publish_direct_cmd(linear_x=speed, angular_z=angular_cmd)
+            rospy.loginfo_throttle(2, f"[NAV] DRIVING dist={dist:.2f}m heading_err={np.degrees(heading_error):.1f}° speed={speed:.2f}")
 
     def check_arrival(self):
         """Check if robot has arrived at navigation target (uses OptiTrack)"""
@@ -659,7 +682,7 @@ class BOTanicaBrain:
         return self.distance_to_optitrack(self.nav_target) < self.ARRIVAL_TOLERANCE
 
     def stop_gvf_navigation(self):
-        """Stop GVF navigation and switch to direct control"""
+        """Stop navigation and switch to direct control"""
         self.gvf_active = False
         self.nav_target = None
         self.set_nav_mode(NavigationMode.DIRECT)
@@ -743,13 +766,15 @@ class BOTanicaBrain:
                 self.reset_light_seeking()
 
     def do_go_to_dock(self):
-        """GVF handles navigation, we just monitor arrival"""
+        """Navigate to dock using direct proportional control"""
         if self.check_arrival():
             rospy.loginfo("Arrived at dock. Charging...")
             self.publish_event("nav_arrival", {"station": "dock"})
             self.stop_gvf_navigation()
             self.publish_event("charge_start", {"battery_pct": self.battery_percent * 100})
             self.set_state(State.CHARGING)
+        else:
+            self.navigate_to_target()
 
     def do_charging(self):
         self.stop()
@@ -769,7 +794,7 @@ class BOTanicaBrain:
                 self.set_state(State.IDLE)
 
     def do_go_to_water(self):
-        """GVF handles navigation, we just monitor arrival"""
+        """Navigate to water station using direct proportional control"""
         if self.check_arrival():
             rospy.loginfo("Arrived at water station. Dosing...")
             self.publish_event("nav_arrival", {"station": "water"})
@@ -777,6 +802,8 @@ class BOTanicaBrain:
             self.publish_event("water_start", {"moisture_pct": self.soil_moisture})
             self.set_state(State.DOSING)
             self.dose_start_time = rospy.Time.now()
+        else:
+            self.navigate_to_target()
 
     def do_dosing(self):
         self.stop()
@@ -876,19 +903,22 @@ class BOTanicaBrain:
             self.reset_light_seeking()
 
     def do_go_to_sunspot(self):
-        """Navigate back to a known good sunspot via GVF."""
+        """Navigate back to a known good sunspot using direct control."""
         if self.current_sunspot is None:
             rospy.logwarn("[GO_TO_SUNSPOT] No target sunspot. Falling back to LIGHT_SCAN.")
             self.set_state(State.LIGHT_SCAN)
             self.reset_light_seeking()
             return
 
-        # Start GVF navigation if not already active
+        # Start navigation if not already active
         if not self.gvf_active:
             target = self.current_sunspot['optitrack_pos']
             rospy.loginfo(f"[GO_TO_SUNSPOT] Navigating to sunspot at {target}")
             self.start_gvf_navigation(target)
             return
+
+        # Drive toward target
+        self.navigate_to_target()
 
         # Check arrival (OptiTrack frame)
         target = self.current_sunspot['optitrack_pos']

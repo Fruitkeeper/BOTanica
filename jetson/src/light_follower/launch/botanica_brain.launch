@@ -48,9 +48,8 @@ Usage:
 
     <!-- Ground robot GVF controller -->
     <node pkg="ground_robot" type="differential_node.py" name="gvf_controller" output="screen">
-        <remap from="pose" to="$(arg pose_topic)"/>
         <remap from="cmd_vel" to="/cmd_vel_gvf"/>
-        <remap from="path" to="/gvf/path"/>
+        <remap from="example_path" to="/gvf/path"/>
         <rosparam>
             vr: 0.2
             kf: 3.0

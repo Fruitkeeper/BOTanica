@@ -20,4 +20,4 @@ switch_dist: 0.6
 pose_topic_name: "/natnet_ros/umh_5/pose"  # OptiTrack pose input
 pose_topic_type: "Pose"               # PoseStamped -> use "Pose"
 cmd_vel_topic_name: "/cmd_vel_gvf"    # Output to mux (not directly to robot)
-path_topic_name: "/gvf/path"          # Path input from botanica_brain
+path_topic_name: "/gvf/path"          # Path input from botanica_brain (remapped from example_path)
