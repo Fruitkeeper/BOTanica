@@ -650,9 +650,10 @@ class BOTanicaBrain:
         heading_error = self.angle_diff(desired_yaw, current_yaw)
 
         # Proportional angular correction
-        # When heading error is near ±180°, always turn in one direction to avoid oscillation
-        if abs(heading_error) > 2.5:  # > ~143° — commit to turning one way
-            angular_cmd = self.NAV_MAX_ANGULAR  # always turn counterclockwise
+        # When heading error is large (>90°), commit to turning one direction
+        # to avoid oscillation near ±180°
+        if abs(heading_error) > math.pi / 2:
+            angular_cmd = self.NAV_MAX_ANGULAR  # always turn CCW until aligned
         else:
             angular_cmd = np.clip(self.NAV_ANGULAR_GAIN * heading_error,
                                   -self.NAV_MAX_ANGULAR, self.NAV_MAX_ANGULAR)
