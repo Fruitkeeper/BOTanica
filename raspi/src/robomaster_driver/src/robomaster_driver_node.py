@@ -9,6 +9,7 @@ from threading import Thread
 from cv_bridge import CvBridge
 import numpy as np
 import tf
+import tf.transformations
 import time
 
 class RoboMasterDriver:
@@ -28,6 +29,9 @@ class RoboMasterDriver:
         # Safety timeout parameters
         self._last_cmd_time = rospy.Time.now()
         self._cmd_timeout = rospy.Duration(0.5)  # 500ms timeout
+
+        # TF broadcaster for odom -> base_link
+        self._tf_br = tf.TransformBroadcaster()
 
         # Current state
         self._current_yaw = 0.0
@@ -263,6 +267,18 @@ class RoboMasterDriver:
         msg.pose.pose.orientation.z = np.sin(yaw_rad/2)
             
         self._odom_pub.publish(msg)
+
+        # Publish odom -> base_link TF transform
+        self._tf_br.sendTransform(
+            (x, y, z),
+            (msg.pose.pose.orientation.x,
+             msg.pose.pose.orientation.y,
+             msg.pose.pose.orientation.z,
+             msg.pose.pose.orientation.w),
+            msg.header.stamp,
+            "base_link",
+            "odom"
+        )
 
     def _gimbal_angle_callback(self, data):
         """Raw gimbal angle handler"""

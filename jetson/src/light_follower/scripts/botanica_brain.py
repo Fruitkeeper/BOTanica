@@ -13,7 +13,10 @@ This node publishes target paths and monitors arrival.
 Light-seeking uses direct cmd_vel control (no GVF needed for rotation/short moves).
 """
 import rospy
+import rospkg
 import cv2
+import json
+import os
 import numpy as np
 from datetime import datetime
 from enum import Enum
@@ -87,6 +90,8 @@ class State(Enum):
     DOSING = "DOSING"
     GO_TO_DOCK = "GO_TO_DOCK"
     CHARGING = "CHARGING"
+    SUNBATHING = "SUNBATHING"
+    GO_TO_SUNSPOT = "GO_TO_SUNSPOT"
 
 
 class NavigationMode(Enum):
@@ -111,6 +116,9 @@ class BOTanicaBrain:
     DEFAULT_DOCK_COORDS = (0.0, 0.0)
     DEFAULT_WATER_COORDS = (1.0, 1.0)
 
+    # OptiTrack frame name (must match your natnet_ros setup)
+    OPTITRACK_FRAME = "world"  # OptiTrack world frame
+
     # Navigation parameters
     DEFAULT_ARRIVAL_TOLERANCE = 0.15       # meters - how close to be "arrived"
 
@@ -128,6 +136,19 @@ class BOTanicaBrain:
 
     # Dosing duration
     DEFAULT_DOSE_DURATION = 5.0            # seconds to "water"
+
+    # Sunbathing parameters
+    SUNBATHING_RECHECK_INTERVAL = 5.0      # seconds between brightness checks
+    SUNBATHING_DROP_THRESHOLD = 100        # brightness below this = "light dropped"
+    SUNBATHING_DROP_COUNT = 3              # consecutive low checks before rescanning
+    MAX_SUNSPOTS = 5                       # max remembered positions
+    SUNSPOT_ARRIVAL_BRIGHTNESS = 130       # min brightness to confirm sunspot is still good
+
+    # Window memory parameters
+    WINDOW_PROMOTION_MINUTES = 30          # min sunbathing time to promote spot to "window"
+    WINDOW_FAIL_DEMOTE_COUNT = 3           # consecutive failures to demote a window
+    MEMORY_STALE_DAYS = 7                  # days without confirmation before reducing confidence
+    MEMORY_FILE = "sunspot_memory.json"    # filename inside package memory/ dir
 
     def __init__(self):
         rospy.init_node("botanica_brain")
@@ -160,9 +181,10 @@ class BOTanicaBrain:
         self.depth_image = None        # Depth image for obstacle avoidance
         self.min_obstacle_dist = float('inf')  # Minimum distance to obstacle
 
-        # Position data
-        self.current_pose = None       # (x, y, yaw) from OptiTrack
-        self.current_yaw = 0.0         # Yaw from OptiTrack (for navigation)
+        # Position data — two distinct coordinate frames, never mixed
+        # OptiTrack: used ONLY for GVF waypoint navigation (dock, water, sunspots)
+        self.optitrack_pose = None     # (x, y, yaw) from OptiTrack, or None if unavailable
+        # Odom: used for light-seeking (scan, align, move) and as fallback display
         self.odom_yaw = 0.0            # Yaw from robot odometry (for light seeking)
         self.odom_pos = (0.0, 0.0)     # Position from robot odometry (for light seeking)
 
@@ -189,6 +211,19 @@ class BOTanicaBrain:
         # Dosing state
         self.dose_start_time = None
 
+        # Sunspot memory (persistent across sessions)
+        self.memory_dir = os.path.join(
+            rospkg.RosPack().get_path('light_follower'), 'memory')
+        os.makedirs(self.memory_dir, exist_ok=True)
+        self.sunspot_memory = []
+        self.current_sunspot = None
+        self.load_memory()
+
+        # Sunbathing state
+        self.sunbathing_drop_counter = 0
+        self.sunbathing_last_check = None
+        self.sunbathing_start_time = None  # track duration for window promotion
+
         # === PUBLISHERS ===
         # Direct cmd_vel for light-seeking (scan/align/move)
         self.cmd_pub = rospy.Publisher("/cmd_vel_direct", Twist, queue_size=10)
@@ -202,6 +237,9 @@ class BOTanicaBrain:
 
         # === DEBUG: Scan status publisher ===
         self.debug_scan_pub = rospy.Publisher("/debug/scan_status", String, queue_size=3)
+
+        # Experiment event publisher (JSON-encoded strings)
+        self.event_pub = rospy.Publisher("/experiment/events", String, queue_size=50)
 
         # === SUBSCRIBERS ===
         # Battery from RoboMaster via Pi
@@ -222,6 +260,9 @@ class BOTanicaBrain:
         # Odometry as backup / for yaw
         rospy.Subscriber("/odom", Odometry, self.odom_callback)
 
+        # Manual state override (publish state name as string)
+        rospy.Subscriber("/brain/override", String, self.override_callback)
+
         rospy.loginfo("BOTanica Brain initialized")
         rospy.loginfo(f"  Obstacle stop distance: {self.OBSTACLE_STOP_DISTANCE}m")
         rospy.loginfo(f"  Battery threshold: {self.BATTERY_LOW_THRESHOLD*100}%")
@@ -234,6 +275,32 @@ class BOTanicaBrain:
         rospy.Timer(rospy.Duration(0.1), self.update)
         rospy.spin()
 
+    # === EXPERIMENT EVENTS ===
+
+    def publish_event(self, event_type, detail=None):
+        """Publish a JSON-encoded experiment event to /experiment/events."""
+        msg_data = {
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "event_type": event_type,
+            "old_state": "",
+            "new_state": "",
+            "detail": detail or {},
+        }
+        self.event_pub.publish(String(data=json.dumps(msg_data)))
+
+    def set_state(self, new_state):
+        """Transition state and publish a state_change event."""
+        old = self.state
+        self.state = new_state
+        msg_data = {
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "event_type": "state_change",
+            "old_state": old.value,
+            "new_state": new_state.value,
+            "detail": {},
+        }
+        self.event_pub.publish(String(data=json.dumps(msg_data)))
+
     # === CALLBACKS ===
 
     def battery_callback(self, msg):
@@ -243,31 +310,67 @@ class BOTanicaBrain:
         self.soil_moisture = msg.moisture  # 0-100%
 
     def pose_callback(self, msg):
-        """OptiTrack pose callback"""
+        """OptiTrack pose callback — only used for GVF waypoint navigation"""
         pos = msg.pose.position
         orient = msg.pose.orientation
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
-        self.current_pose = (pos.x, pos.y, yaw)
-        self.current_yaw = yaw
+        self.optitrack_pose = (pos.x, pos.y, yaw)
 
     def odom_callback(self, msg):
-        """Odometry from RoboMaster - always update odom for light seeking"""
+        """Odometry from RoboMaster — used ONLY for light-seeking (scan/align/move)"""
         orient = msg.pose.pose.orientation
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
-        self.odom_yaw = yaw  # Always track robot's own yaw for light seeking
+        self.odom_yaw = yaw
         pos = msg.pose.pose.position
-        self.odom_pos = (pos.x, pos.y)  # Always track robot's own position for light seeking
-        # Only use for current_pose if no OptiTrack pose
-        if self.current_pose is None:
-            pos = msg.pose.pose.position
-            self.current_pose = (pos.x, pos.y, yaw)
-        self.current_yaw = yaw
+        self.odom_pos = (pos.x, pos.y)
 
     def image_callback(self, msg):
         try:
             self.image = imgmsg_to_cv2(msg, "bgr8")
         except Exception as e:
             rospy.logerr(f"Image error: {e}")
+
+    def override_callback(self, msg):
+        """Manual state override via /brain/override topic.
+
+        Accepted commands:
+            GO_TO_DOCK   - navigate to dock
+            GO_TO_WATER  - navigate to water station
+            LIGHT_SCAN   - start a fresh light scan
+            SUNBATHING   - park and sunbathe (at current position)
+            IDLE         - stop and idle
+            STOP         - alias for IDLE
+        """
+        cmd = msg.data.strip().upper()
+        rospy.logwarn(f"[OVERRIDE] Received manual command: '{cmd}'")
+
+        # Stop whatever is happening
+        if self.state == State.SUNBATHING:
+            self.end_sunbathing()
+        self.stop_gvf_navigation()
+        self.reset_light_seeking()
+
+        if cmd == "GO_TO_DOCK":
+            self.set_state(State.GO_TO_DOCK)
+            self.start_gvf_navigation(self.DOCK_COORDS)
+        elif cmd == "GO_TO_WATER":
+            self.set_state(State.GO_TO_WATER)
+            self.start_gvf_navigation(self.WATER_COORDS)
+        elif cmd == "LIGHT_SCAN":
+            self.set_state(State.LIGHT_SCAN)
+        elif cmd == "SUNBATHING":
+            self.save_sunspot()
+            self.set_state(State.SUNBATHING)
+            self.sunbathing_last_check = None
+            self.sunbathing_drop_counter = 0
+        elif cmd in ("IDLE", "STOP"):
+            self.set_state(State.IDLE)
+        else:
+            rospy.logwarn(f"[OVERRIDE] Unknown command: '{cmd}'. "
+                          f"Valid: GO_TO_DOCK, GO_TO_WATER, LIGHT_SCAN, SUNBATHING, IDLE, STOP")
+            return
+
+        self.publish_event("manual_override", {"command": cmd})
 
     def depth_callback(self, msg):
         """Process depth image for obstacle detection"""
@@ -307,6 +410,49 @@ class BOTanicaBrain:
         """Check if we should slow down due to nearby obstacle"""
         return self.min_obstacle_dist < self.OBSTACLE_SLOW_DISTANCE
 
+    # === PERSISTENT MEMORY ===
+
+    def load_memory(self):
+        """Load sunspot memory from disk."""
+        path = os.path.join(self.memory_dir, self.MEMORY_FILE)
+        if not os.path.exists(path):
+            rospy.loginfo("[MEMORY] No saved memory found. Starting fresh.")
+            return
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            self.sunspot_memory = data.get('sunspots', [])
+            # Decay stale spots on load
+            today = datetime.now().strftime('%Y-%m-%d')
+            for spot in self.sunspot_memory:
+                last = spot.get('last_confirmed')
+                if last:
+                    days_ago = (datetime.strptime(today, '%Y-%m-%d') -
+                                datetime.strptime(last, '%Y-%m-%d')).days
+                    if days_ago > self.MEMORY_STALE_DAYS:
+                        spot['fail_count'] = spot.get('fail_count', 0) + 1
+                        rospy.loginfo(f"[MEMORY] Stale spot (last confirmed {days_ago}d ago), "
+                                      f"incremented fail_count to {spot['fail_count']}")
+            rospy.loginfo(f"[MEMORY] Loaded {len(self.sunspot_memory)} sunspots from disk.")
+            for i, s in enumerate(self.sunspot_memory):
+                rospy.loginfo(f"  [{i}] pos={s.get('optitrack_pos')} window={s.get('is_window', False)} "
+                              f"total_min={s.get('total_minutes', 0):.0f} "
+                              f"hours={s.get('bright_hours', [])} "
+                              f"fails={s.get('fail_count', 0)}")
+        except Exception as e:
+            rospy.logwarn(f"[MEMORY] Failed to load memory: {e}")
+
+    def save_memory(self):
+        """Persist sunspot memory to disk."""
+        path = os.path.join(self.memory_dir, self.MEMORY_FILE)
+        try:
+            data = {'sunspots': self.sunspot_memory}
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+            rospy.loginfo(f"[MEMORY] Saved {len(self.sunspot_memory)} sunspots to disk.")
+        except Exception as e:
+            rospy.logwarn(f"[MEMORY] Failed to save memory: {e}")
+
     # === UTILITY FUNCTIONS ===
 
     def is_daytime(self):
@@ -321,11 +467,12 @@ class BOTanicaBrain:
             d += 2 * np.pi
         return d
 
-    def distance_to(self, target):
-        if self.current_pose is None:
+    def distance_to_optitrack(self, target):
+        """Distance from current OptiTrack position to target. Returns inf if no OptiTrack."""
+        if self.optitrack_pose is None:
             return float('inf')
-        return np.hypot(self.current_pose[0] - target[0],
-                        self.current_pose[1] - target[1])
+        return np.hypot(self.optitrack_pose[0] - target[0],
+                        self.optitrack_pose[1] - target[1])
 
     def get_brightness(self):
         if self.image is None:
@@ -333,6 +480,98 @@ class BOTanicaBrain:
         gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (21, 21), 0)
         return np.mean(blurred)
+
+    # === SUNSPOT MEMORY ===
+
+    def save_sunspot(self):
+        """Save current position as a known good sunspot."""
+        brightness = self.get_brightness()
+        optitrack_pos = list(self.optitrack_pose[:2]) if self.optitrack_pose else None
+        odom_pos = list(self.odom_pos)
+        now_hour = datetime.now().hour
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # Check if we already have a spot near this position (within arrival tolerance)
+        existing = self._find_nearby_sunspot(optitrack_pos)
+        if existing is not None:
+            # Update existing spot instead of creating a duplicate
+            existing['brightness'] = max(existing['brightness'], brightness)
+            existing['fail_count'] = 0
+            existing['last_confirmed'] = today
+            if now_hour not in existing.get('bright_hours', []):
+                existing.setdefault('bright_hours', []).append(now_hour)
+                existing['bright_hours'].sort()
+            self.current_sunspot = existing
+            rospy.loginfo(f"[SUNSPOT] Updated existing sunspot: pos={optitrack_pos}, "
+                          f"brightness={brightness:.0f}, hours={existing['bright_hours']}")
+        else:
+            spot = {
+                'odom_pos': odom_pos,
+                'optitrack_pos': optitrack_pos,
+                'brightness': brightness,
+                'fail_count': 0,
+                'is_window': False,
+                'total_minutes': 0.0,
+                'bright_hours': [now_hour],
+                'last_confirmed': today,
+                'last_failed': None,
+                'created': today,
+            }
+            self.sunspot_memory.append(spot)
+            self.current_sunspot = spot
+
+        # Cap list at MAX_SUNSPOTS, keeping windows first, then by brightness
+        if len(self.sunspot_memory) > self.MAX_SUNSPOTS:
+            self.sunspot_memory.sort(
+                key=lambda s: (s.get('is_window', False), s.get('brightness', 0)),
+                reverse=True)
+            self.sunspot_memory = self.sunspot_memory[:self.MAX_SUNSPOTS]
+
+        self.save_memory()
+        rospy.loginfo(f"[SUNSPOT] Saved sunspot: optitrack={optitrack_pos}, brightness={brightness:.0f} "
+                      f"(total: {len(self.sunspot_memory)})")
+        self.publish_event("sunspot_saved", {
+            "odom_pos": odom_pos,
+            "optitrack_pos": optitrack_pos,
+            "brightness": brightness,
+            "total_spots": len(self.sunspot_memory),
+            "hour": now_hour,
+        })
+
+    def _find_nearby_sunspot(self, optitrack_pos):
+        """Find an existing sunspot near the given position."""
+        if optitrack_pos is None:
+            return None
+        for spot in self.sunspot_memory:
+            spos = spot.get('optitrack_pos')
+            if spos is None:
+                continue
+            dist = np.hypot(spos[0] - optitrack_pos[0], spos[1] - optitrack_pos[1])
+            if dist < self.ARRIVAL_TOLERANCE * 2:
+                return spot
+        return None
+
+    def get_best_sunspot(self):
+        """Return the best sunspot, preferring windows whose bright_hours match now.
+        Returns None if no valid spot exists."""
+        now_hour = datetime.now().hour
+        valid = [s for s in self.sunspot_memory
+                 if s.get('optitrack_pos') is not None
+                 and s.get('fail_count', 0) < self.WINDOW_FAIL_DEMOTE_COUNT]
+        if not valid:
+            return None
+
+        def score(spot):
+            s = spot.get('brightness', 0)
+            # Windows get a large bonus
+            if spot.get('is_window', False):
+                s += 200
+            # Spots bright at the current hour get a bonus
+            if now_hour in spot.get('bright_hours', []):
+                s += 100
+            return s
+
+        return max(valid, key=score)
 
     # === NAVIGATION CONTROL ===
 
@@ -372,13 +611,12 @@ class BOTanicaBrain:
 
     def start_gvf_navigation(self, target):
         """
-        Start GVF navigation to target waypoint.
-        Publishes a path from current position to target.
-        vectorfield_stack will handle the actual navigation.
+        Start GVF navigation to target waypoint (in OptiTrack frame).
+        Requires OptiTrack pose — refuses to start without it.
         """
-        if self.current_pose is None:
-            rospy.logwarn("Cannot start GVF navigation: no pose data")
-            return
+        if self.optitrack_pose is None:
+            rospy.logwarn("Cannot start GVF navigation: no OptiTrack pose available")
+            return False
 
         self.nav_target = target
         self.set_nav_mode(NavigationMode.GVF)
@@ -386,13 +624,12 @@ class BOTanicaBrain:
         # Create path message for vectorfield_stack
         path_msg = GVFPath()
         path_msg.header.stamp = rospy.Time.now()
-        path_msg.header.frame_id = "odom"  # or your OptiTrack frame
+        path_msg.header.frame_id = self.OPTITRACK_FRAME
 
-        # Path: current position -> target
-        # vectorfield_stack will create a smooth vector field
+        # Path: current OptiTrack position -> target (both in OptiTrack frame)
         start_point = Point32()
-        start_point.x = self.current_pose[0]
-        start_point.y = self.current_pose[1]
+        start_point.x = self.optitrack_pose[0]
+        start_point.y = self.optitrack_pose[1]
         start_point.z = 0.0
 
         end_point = Point32()
@@ -408,13 +645,18 @@ class BOTanicaBrain:
         self.path_pub.publish(path_msg)
         self.gvf_active = True
 
-        rospy.loginfo(f"GVF navigation started: ({self.current_pose[0]:.2f}, {self.current_pose[1]:.2f}) -> ({target[0]:.2f}, {target[1]:.2f})")
+        rospy.loginfo(f"GVF navigation started: ({self.optitrack_pose[0]:.2f}, {self.optitrack_pose[1]:.2f}) -> ({target[0]:.2f}, {target[1]:.2f})")
+        self.publish_event("nav_goal", {
+            "from": [round(self.optitrack_pose[0], 3), round(self.optitrack_pose[1], 3)],
+            "to": [round(target[0], 3), round(target[1], 3)],
+        })
+        return True
 
     def check_arrival(self):
-        """Check if robot has arrived at navigation target"""
+        """Check if robot has arrived at navigation target (uses OptiTrack)"""
         if self.nav_target is None:
             return False
-        return self.distance_to(self.nav_target) < self.ARRIVAL_TOLERANCE
+        return self.distance_to_optitrack(self.nav_target) < self.ARRIVAL_TOLERANCE
 
     def stop_gvf_navigation(self):
         """Stop GVF navigation and switch to direct control"""
@@ -432,17 +674,21 @@ class BOTanicaBrain:
         if self.battery_percent < self.BATTERY_LOW_THRESHOLD:
             if self.state not in [State.GO_TO_DOCK, State.CHARGING]:
                 rospy.logwarn(f"Battery low ({self.battery_percent*100:.1f}%)! Going to dock.")
+                if self.state == State.SUNBATHING:
+                    self.end_sunbathing()
                 self.stop_gvf_navigation()
-                self.state = State.GO_TO_DOCK
+                self.set_state(State.GO_TO_DOCK)
                 self.reset_light_seeking()
                 self.start_gvf_navigation(self.DOCK_COORDS)
 
         # P2: Moisture low - override light-seeking (but not battery states)
         elif self.soil_moisture < self.MOISTURE_LOW_THRESHOLD:
-            if self.state in [State.IDLE, State.LIGHT_SCAN, State.LIGHT_ALIGN, State.LIGHT_MOVE]:
+            if self.state in [State.IDLE, State.LIGHT_SCAN, State.LIGHT_ALIGN, State.LIGHT_MOVE, State.SUNBATHING, State.GO_TO_SUNSPOT]:
                 rospy.logwarn(f"Moisture low ({self.soil_moisture}%)! Going to water.")
+                if self.state == State.SUNBATHING:
+                    self.end_sunbathing()
                 self.stop_gvf_navigation()
-                self.state = State.GO_TO_WATER
+                self.set_state(State.GO_TO_WATER)
                 self.reset_light_seeking()
                 self.start_gvf_navigation(self.WATER_COORDS)
 
@@ -475,38 +721,61 @@ class BOTanicaBrain:
         elif self.state == State.LIGHT_MOVE:
             self.do_light_move()
 
+        elif self.state == State.SUNBATHING:
+            self.do_sunbathing()
+
+        elif self.state == State.GO_TO_SUNSPOT:
+            self.do_go_to_sunspot()
+
     # === STATE HANDLERS ===
 
     def do_idle(self):
         self.stop()
         if self.is_daytime():
-            rospy.loginfo("Daytime detected. Starting light-seeking.")
-            self.state = State.LIGHT_SCAN
-            self.reset_light_seeking()
+            spot = self.get_best_sunspot()
+            if spot is not None:
+                rospy.loginfo("Daytime detected. Returning to known sunspot.")
+                self.current_sunspot = spot
+                self.set_state(State.GO_TO_SUNSPOT)
+            else:
+                rospy.loginfo("Daytime detected. Starting light-seeking.")
+                self.set_state(State.LIGHT_SCAN)
+                self.reset_light_seeking()
 
     def do_go_to_dock(self):
         """GVF handles navigation, we just monitor arrival"""
         if self.check_arrival():
             rospy.loginfo("Arrived at dock. Charging...")
+            self.publish_event("nav_arrival", {"station": "dock"})
             self.stop_gvf_navigation()
-            self.state = State.CHARGING
+            self.publish_event("charge_start", {"battery_pct": self.battery_percent * 100})
+            self.set_state(State.CHARGING)
 
     def do_charging(self):
         self.stop()
         if self.battery_percent >= self.BATTERY_FULL:
             rospy.loginfo("Fully charged! Resuming behavior.")
+            self.publish_event("charge_end", {"battery_pct": self.battery_percent * 100})
             if self.is_daytime():
-                self.state = State.LIGHT_SCAN
-                self.reset_light_seeking()
+                spot = self.get_best_sunspot()
+                if spot is not None:
+                    rospy.loginfo("Returning to known sunspot after charging.")
+                    self.current_sunspot = spot
+                    self.set_state(State.GO_TO_SUNSPOT)
+                else:
+                    self.set_state(State.LIGHT_SCAN)
+                    self.reset_light_seeking()
             else:
-                self.state = State.IDLE
+                self.set_state(State.IDLE)
 
     def do_go_to_water(self):
         """GVF handles navigation, we just monitor arrival"""
         if self.check_arrival():
             rospy.loginfo("Arrived at water station. Dosing...")
+            self.publish_event("nav_arrival", {"station": "water"})
             self.stop_gvf_navigation()
-            self.state = State.DOSING
+            self.publish_event("water_start", {"moisture_pct": self.soil_moisture})
+            self.set_state(State.DOSING)
             self.dose_start_time = rospy.Time.now()
 
     def do_dosing(self):
@@ -514,9 +783,156 @@ class BOTanicaBrain:
         elapsed = (rospy.Time.now() - self.dose_start_time).to_sec()
         rospy.loginfo_throttle(1, f"Dosing... {elapsed:.1f}/{self.DOSE_DURATION}s")
         if elapsed >= self.DOSE_DURATION:
-            rospy.loginfo("Dosing complete. Starting fresh light scan.")
-            self.state = State.LIGHT_SCAN
+            rospy.loginfo("Dosing complete.")
+            self.publish_event("water_end", {"duration_s": elapsed})
+            spot = self.get_best_sunspot()
+            if spot is not None:
+                rospy.loginfo("Returning to known sunspot after dosing.")
+                self.current_sunspot = spot
+                self.set_state(State.GO_TO_SUNSPOT)
+            else:
+                rospy.loginfo("No sunspot memory. Starting fresh light scan.")
+                self.set_state(State.LIGHT_SCAN)
+                self.reset_light_seeking()
+
+    def end_sunbathing(self):
+        """Called when leaving SUNBATHING. Accumulates duration and may promote to window."""
+        if self.sunbathing_start_time is None:
+            return
+        elapsed_min = (rospy.Time.now() - self.sunbathing_start_time).to_sec() / 60.0
+        self.sunbathing_start_time = None
+        self.sunbathing_last_check = None
+        self.sunbathing_drop_counter = 0
+
+        if self.current_sunspot is None:
+            return
+
+        self.current_sunspot['total_minutes'] = self.current_sunspot.get('total_minutes', 0) + elapsed_min
+        now_hour = datetime.now().hour
+        if now_hour not in self.current_sunspot.get('bright_hours', []):
+            self.current_sunspot.setdefault('bright_hours', []).append(now_hour)
+            self.current_sunspot['bright_hours'].sort()
+        self.current_sunspot['last_confirmed'] = datetime.now().strftime('%Y-%m-%d')
+        self.current_sunspot['fail_count'] = 0
+
+        total = self.current_sunspot['total_minutes']
+        was_window = self.current_sunspot.get('is_window', False)
+        if total >= self.WINDOW_PROMOTION_MINUTES and not was_window:
+            self.current_sunspot['is_window'] = True
+            rospy.loginfo(f"[WINDOW] Promoted sunspot to WINDOW! total_minutes={total:.0f} "
+                          f"hours={self.current_sunspot.get('bright_hours', [])}")
+            self.publish_event("window_promoted", {
+                "position": self.current_sunspot.get('optitrack_pos'),
+                "total_minutes": total,
+                "bright_hours": self.current_sunspot.get('bright_hours', []),
+            })
+
+        rospy.loginfo(f"[SUNBATHING] Ended after {elapsed_min:.1f}min (total={total:.0f}min, "
+                      f"window={self.current_sunspot.get('is_window', False)})")
+        self.save_memory()
+
+    def do_sunbathing(self):
+        """Park at a bright spot and periodically recheck brightness."""
+        # Publish stop periodically to prevent mux timeout
+        self.stop()
+
+        if not self.is_daytime():
+            rospy.loginfo("[SUNBATHING] Night detected. Transitioning to IDLE.")
+            self.end_sunbathing()
+            self.set_state(State.IDLE)
+            return
+
+        now = rospy.Time.now()
+
+        # Initialize on first entry
+        if self.sunbathing_last_check is None:
+            self.sunbathing_last_check = now
+            self.sunbathing_start_time = now
+            self.sunbathing_drop_counter = 0
+            rospy.loginfo("[SUNBATHING] Parked at sunspot. Monitoring brightness.")
+            return
+
+        elapsed = (now - self.sunbathing_last_check).to_sec()
+        if elapsed < self.SUNBATHING_RECHECK_INTERVAL:
+            return
+
+        # Time to recheck
+        self.sunbathing_last_check = now
+        brightness = self.get_brightness()
+
+        if brightness < self.SUNBATHING_DROP_THRESHOLD:
+            self.sunbathing_drop_counter += 1
+            rospy.logwarn(f"[SUNBATHING] Brightness dropped: {brightness:.0f} < {self.SUNBATHING_DROP_THRESHOLD} "
+                          f"(count: {self.sunbathing_drop_counter}/{self.SUNBATHING_DROP_COUNT})")
+        else:
+            self.sunbathing_drop_counter = 0
+
+        rospy.loginfo_throttle(10, f"[SUNBATHING] brightness={brightness:.0f} drop_counter={self.sunbathing_drop_counter}")
+
+        if self.sunbathing_drop_counter >= self.SUNBATHING_DROP_COUNT:
+            rospy.logwarn("[SUNBATHING] Light dropped consistently. Rescanning.")
+            self.end_sunbathing()
+            self.set_state(State.LIGHT_SCAN)
             self.reset_light_seeking()
+
+    def do_go_to_sunspot(self):
+        """Navigate back to a known good sunspot via GVF."""
+        if self.current_sunspot is None:
+            rospy.logwarn("[GO_TO_SUNSPOT] No target sunspot. Falling back to LIGHT_SCAN.")
+            self.set_state(State.LIGHT_SCAN)
+            self.reset_light_seeking()
+            return
+
+        # Start GVF navigation if not already active
+        if not self.gvf_active:
+            target = self.current_sunspot['optitrack_pos']
+            rospy.loginfo(f"[GO_TO_SUNSPOT] Navigating to sunspot at {target}")
+            self.start_gvf_navigation(target)
+            return
+
+        # Check arrival (OptiTrack frame)
+        target = self.current_sunspot['optitrack_pos']
+        if self.distance_to_optitrack(target) < self.ARRIVAL_TOLERANCE:
+            self.stop_gvf_navigation()
+            brightness = self.get_brightness()
+            rospy.loginfo(f"[GO_TO_SUNSPOT] Arrived at sunspot. Brightness: {brightness:.0f}")
+            self.publish_event("nav_arrival", {"station": "sunspot", "brightness": brightness})
+
+            if brightness >= self.SUNSPOT_ARRIVAL_BRIGHTNESS:
+                rospy.loginfo("[GO_TO_SUNSPOT] Sunspot still bright! Entering SUNBATHING.")
+                self.set_state(State.SUNBATHING)
+                self.sunbathing_last_check = None
+                self.sunbathing_drop_counter = 0
+            else:
+                rospy.logwarn(f"[GO_TO_SUNSPOT] Sunspot too dark ({brightness:.0f} < {self.SUNSPOT_ARRIVAL_BRIGHTNESS}). Marking failed.")
+                self.publish_event("sunspot_failed", {
+                    "brightness": brightness,
+                    "threshold": self.SUNSPOT_ARRIVAL_BRIGHTNESS,
+                    "position": list(target),
+                })
+                self.current_sunspot['fail_count'] = self.current_sunspot.get('fail_count', 0) + 1
+                self.current_sunspot['last_failed'] = datetime.now().strftime('%Y-%m-%d')
+                # Demote window if too many failures
+                if (self.current_sunspot.get('is_window', False) and
+                        self.current_sunspot['fail_count'] >= self.WINDOW_FAIL_DEMOTE_COUNT):
+                    self.current_sunspot['is_window'] = False
+                    rospy.logwarn(f"[WINDOW] Demoted window after {self.current_sunspot['fail_count']} failures.")
+                    self.publish_event("window_demoted", {
+                        "position": self.current_sunspot.get('optitrack_pos'),
+                        "fail_count": self.current_sunspot['fail_count'],
+                    })
+                self.save_memory()
+
+                # Try next best sunspot
+                next_spot = self.get_best_sunspot()
+                if next_spot is not None:
+                    rospy.loginfo("[GO_TO_SUNSPOT] Trying next best sunspot.")
+                    self.current_sunspot = next_spot
+                    self.start_gvf_navigation(next_spot['optitrack_pos'])
+                else:
+                    rospy.loginfo("[GO_TO_SUNSPOT] No valid sunspots left. Falling back to LIGHT_SCAN.")
+                    self.set_state(State.LIGHT_SCAN)
+                    self.reset_light_seeking()
 
     def reset_light_seeking(self):
         self.scan_start_yaw = None
@@ -597,17 +1013,26 @@ class BOTanicaBrain:
             bright_angles = [b for _, b in self.brightness_log if b > self.BRIGHTNESS_SCAN_THRESHOLD]
             rospy.loginfo(f"Scan complete. Bright angles: {len(bright_angles)}/{len(self.brightness_log)}")
 
+            self.publish_event("scan_complete", {
+                "num_bright_angles": len(bright_angles),
+                "total_angles": len(self.brightness_log),
+                "brightest": max((b for _, b in self.brightness_log), default=0),
+                "duration_s": scan_duration,
+            })
+
             if len(bright_angles) >= self.MIN_BRIGHT_ANGLES:
-                rospy.loginfo("Environment is well-lit. Staying here.")
-                # Wait a bit then rescan
-                rospy.sleep(5.0)
+                rospy.loginfo("Environment is well-lit. Saving sunspot and entering SUNBATHING.")
+                self.save_sunspot()
+                self.set_state(State.SUNBATHING)
+                self.sunbathing_last_check = None
+                self.sunbathing_drop_counter = 0
                 self.reset_light_seeking()
                 return
 
             if self.brightness_log:
                 self.target_yaw = max(self.brightness_log, key=lambda x: x[1])[0]
                 rospy.loginfo(f"Brightest direction: {np.degrees(self.target_yaw):.1f}°")
-                self.state = State.LIGHT_ALIGN
+                self.set_state(State.LIGHT_ALIGN)
             else:
                 rospy.logwarn("No brightness data. Rescanning.")
                 self.reset_light_seeking()
@@ -632,7 +1057,7 @@ class BOTanicaBrain:
             # Use odometry position for light seeking distance tracking
             self.move_start_pos = self.odom_pos
             self.bright_counter = 0
-            self.state = State.LIGHT_MOVE
+            self.set_state(State.LIGHT_MOVE)
 
     def do_light_move(self):
         """Move toward light source - uses DIRECT control"""
@@ -640,7 +1065,7 @@ class BOTanicaBrain:
             self.set_nav_mode(NavigationMode.DIRECT)
 
         if self.move_start_pos is None:
-            self.state = State.LIGHT_SCAN
+            self.set_state(State.LIGHT_SCAN)
             self.reset_light_seeking()
             return
 
@@ -654,9 +1079,12 @@ class BOTanicaBrain:
         if brightness > self.BRIGHTNESS_MOVE_THRESHOLD:
             self.bright_counter += 1
             if self.bright_counter >= self.BRIGHT_CONFIRM_COUNT:
-                rospy.loginfo("Found bright area. Rescanning.")
+                rospy.loginfo("Found bright area. Saving sunspot and entering SUNBATHING.")
                 self.stop()
-                self.state = State.LIGHT_SCAN
+                self.save_sunspot()
+                self.set_state(State.SUNBATHING)
+                self.sunbathing_last_check = None
+                self.sunbathing_drop_counter = 0
                 self.reset_light_seeking()
                 return
         else:
@@ -667,8 +1095,9 @@ class BOTanicaBrain:
             if self.is_obstacle_ahead():
                 # Obstacle too close - stop and rescan
                 rospy.logwarn(f"[OBSTACLE] Obstacle detected at {self.min_obstacle_dist:.2f}m! Stopping and rescanning.")
+                self.publish_event("obstacle_detected", {"distance_m": self.min_obstacle_dist})
                 self.stop()
-                self.state = State.LIGHT_SCAN
+                self.set_state(State.LIGHT_SCAN)
                 self.reset_light_seeking()
                 return
 
@@ -685,7 +1114,7 @@ class BOTanicaBrain:
         else:
             rospy.loginfo("Moved 1m. Rescanning.")
             self.stop()
-            self.state = State.LIGHT_SCAN
+            self.set_state(State.LIGHT_SCAN)
             self.reset_light_seeking()
 
 

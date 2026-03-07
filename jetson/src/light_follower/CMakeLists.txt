@@ -21,6 +21,7 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/botanica_brain.py
   scripts/cmd_vel_mux.py
+  scripts/experiment_logger.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

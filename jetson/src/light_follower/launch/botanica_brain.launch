@@ -22,11 +22,19 @@ Usage:
     <!-- OptiTrack pose topic (adjust if your setup differs) -->
     <arg name="pose_topic" default="/natnet_ros/umh_5/pose"/>
 
-    <!-- Waypoint coordinates (update for your OptiTrack setup) -->
-    <arg name="dock_x" default="0.0"/>
-    <arg name="dock_y" default="0.0"/>
-    <arg name="water_x" default="1.0"/>
-    <arg name="water_y" default="1.0"/>
+    <!-- Waypoint coordinates in OptiTrack "world" frame -->
+    <arg name="dock_x" default="3.156"/>
+    <arg name="dock_y" default="3.886"/>
+    <arg name="water_x" default="0.636"/>
+    <arg name="water_y" default="4.266"/>
+
+
+    <!-- ========== OPTITRACK PUCK OFFSET ========== -->
+    <!-- The puck is NOT at the robot center: 8cm from right, 4cm from back -->
+    <!-- Offset from puck to base_link: x=+0.115 (forward), y=+0.0425 (left), z=-0.12 (puck is 12cm above base) -->
+    <!-- This corrects ~12cm of systematic navigation error -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="optitrack_to_base_tf"
+          args="0.115 0.0425 -0.12 0 0 0 optitrack_puck base_link" />
 
 
     <!-- ========== SENSOR PUBLISHER ========== -->
