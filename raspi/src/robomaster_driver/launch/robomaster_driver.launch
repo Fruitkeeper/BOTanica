@@ -1,6 +1,6 @@
 <launch>
   <arg name="robot_ip" default="10.205.1.138"/>
-  <arg name="local_ip" default="10.205.1.96"/>
+  <arg name="local_ip" default="10.205.1.137"/>
 
   <!-- Launch the driver node -->
   <node name="robomaster_driver" pkg="robomaster_driver" type="robomaster_driver_node.py" output="screen">
