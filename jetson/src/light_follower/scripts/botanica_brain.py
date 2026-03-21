@@ -330,11 +330,24 @@ class BOTanicaBrain:
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
         self.optitrack_pose = (pos.x, pos.y, yaw)
 
-        # Continuously update yaw offset using OptiTrack yaw directly
-        # world_yaw = odom_yaw + yaw_offset  =>  yaw_offset = world_yaw - odom_yaw
-        self.yaw_offset = self.angle_diff(yaw, self.odom_yaw)
-        rospy.loginfo_once(f"[YAW OFFSET] Calibrated: {np.degrees(self.yaw_offset):.1f}° "
-                           f"(optitrack_yaw={np.degrees(yaw):.1f}° odom_yaw={np.degrees(self.odom_yaw):.1f}°)")
+        # Calibrate yaw offset from straight-line movement direction.
+        # The puck may be mounted rotated, so we can't use OptiTrack yaw directly.
+        # Compare movement direction (from OptiTrack positions) to odom yaw.
+        xy = (pos.x, pos.y)
+        if self.yaw_offset is None and self._prev_optitrack_xy is not None:
+            dx = xy[0] - self._prev_optitrack_xy[0]
+            dy = xy[1] - self._prev_optitrack_xy[1]
+            moved = math.hypot(dx, dy)
+            # Only calibrate if moved >15cm during forward driving (not scanning/spinning)
+            if moved > 0.15 and self.state not in (State.LIGHT_SCAN, State.IDLE):
+                world_bearing = math.atan2(dy, dx)
+                odom_yaw_mid = (self._prev_odom_yaw_at_sample + self.odom_yaw) / 2.0
+                self.yaw_offset = self.angle_diff(world_bearing, odom_yaw_mid)
+                rospy.loginfo(f"[YAW OFFSET] Calibrated: {np.degrees(self.yaw_offset):.1f}° "
+                              f"(world_bearing={np.degrees(world_bearing):.1f}° odom_mid={np.degrees(odom_yaw_mid):.1f}°)")
+        # Always update the reference point so we don't use stale positions
+        self._prev_optitrack_xy = xy
+        self._prev_odom_yaw_at_sample = self.odom_yaw
 
     def odom_callback(self, msg):
         """Odometry from RoboMaster — used ONLY for light-seeking (scan/align/move)"""

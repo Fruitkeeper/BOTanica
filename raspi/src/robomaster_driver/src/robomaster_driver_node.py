@@ -29,6 +29,7 @@ class RoboMasterDriver:
         # Safety timeout parameters
         self._last_cmd_time = rospy.Time.now()
         self._cmd_timeout = rospy.Duration(0.5)  # 500ms timeout
+        self._timed_out = False  # track whether we already sent the stop
 
         # TF broadcaster for odom -> base_link
         self._tf_br = tf.TransformBroadcaster()
@@ -109,6 +110,7 @@ class RoboMasterDriver:
         """
         try:
             self._last_cmd_time = rospy.Time.now()
+            self._timed_out = False
             self._cmd_received_count += 1
 
             # Convert angular velocity from rad/s to deg/s
@@ -242,14 +244,16 @@ class RoboMasterDriver:
 
     def _position_callback(self, data):
         """Raw position data handler"""
-        # Check for command timeout
+        # Check for command timeout — only send stop once when timeout first triggers
         if (rospy.Time.now() - self._last_cmd_time) > self._cmd_timeout:
-            # === DEBUG: Log timeout ===
-            if self._turn_start_yaw is not None:
-                self._turn_timeout_count += 1
-                rospy.logwarn(f"[TIMEOUT] Turn interrupted! accumulated={self._turn_accumulated:.2f}° timeout_count={self._turn_timeout_count}")
-                self._turn_start_yaw = None
-            self._robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
+            if not self._timed_out:
+                self._timed_out = True
+                # === DEBUG: Log timeout ===
+                if self._turn_start_yaw is not None:
+                    self._turn_timeout_count += 1
+                    rospy.logwarn(f"[TIMEOUT] Turn interrupted! accumulated={self._turn_accumulated:.2f}° timeout_count={self._turn_timeout_count}")
+                    self._turn_start_yaw = None
+                self._robot.chassis.drive_wheels(w1=0, w2=0, w3=0, w4=0)
         
         x, y, z = data
         msg = Odometry()
