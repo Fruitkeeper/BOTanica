@@ -127,7 +127,7 @@ class BOTanicaBrain:
 
     # Light-seeking parameters
     BRIGHTNESS_SCAN_THRESHOLD = 150
-    BRIGHTNESS_MOVE_THRESHOLD = 160
+    BRIGHTNESS_MOVE_THRESHOLD = 200
     MIN_BRIGHT_ANGLES = 5
     LIGHT_MOVE_SPEED = 0.1
     BRIGHT_CONFIRM_COUNT = 3
@@ -1195,7 +1195,7 @@ class BOTanicaBrain:
         else:
             self.bright_counter = 0
 
-        if dist < 1.0:
+        if dist < 2.0:
             # === OBSTACLE AVOIDANCE ===
             if self.is_obstacle_ahead():
                 # Obstacle too close - stop and rescan
@@ -1217,7 +1217,7 @@ class BOTanicaBrain:
 
             self.publish_direct_cmd(linear_x=speed)
         else:
-            rospy.loginfo("Moved 1m. Rescanning.")
+            rospy.loginfo("Moved 2m. Rescanning.")
             self.stop()
             self.set_state(State.LIGHT_SCAN)
             self.reset_light_seeking()
