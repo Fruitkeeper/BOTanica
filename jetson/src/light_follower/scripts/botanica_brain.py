@@ -88,6 +88,7 @@ class State(Enum):
     LIGHT_MOVE = "LIGHT_MOVE"
     GO_TO_WATER = "GO_TO_WATER"
     DOSING = "DOSING"
+    REVERSING = "REVERSING"
     GO_TO_DOCK = "GO_TO_DOCK"
     CHARGING = "CHARGING"
     SUNBATHING = "SUNBATHING"
@@ -138,6 +139,8 @@ class BOTanicaBrain:
 
     # Dosing duration
     DEFAULT_DOSE_DURATION = 30.0           # seconds to wait for ultrasonic doser
+    REVERSE_DURATION = 3.0                 # seconds to reverse after dosing
+    REVERSE_SPEED = -0.10                  # m/s backward speed
 
     # Sunbathing parameters
     SUNBATHING_RECHECK_INTERVAL = 5.0      # seconds between brightness checks
@@ -225,6 +228,7 @@ class BOTanicaBrain:
         os.makedirs(self.memory_dir, exist_ok=True)
         self.sunspot_memory = []
         self.current_sunspot = None
+        self.pre_interrupt_sunspot = None  # Saved sunspot to return to after dock/water
         # Disabled: sunspot memory not useful until robot can stay 30+ min
         # self.load_memory()
 
@@ -725,6 +729,9 @@ class BOTanicaBrain:
         if self.battery_percent < self.BATTERY_LOW_THRESHOLD:
             if self.state not in [State.GO_TO_DOCK, State.CHARGING]:
                 rospy.logwarn(f"Battery low ({self.battery_percent*100:.1f}%)! Going to dock.")
+                # Remember where we were so we can return after charging
+                if self.current_sunspot is not None:
+                    self.pre_interrupt_sunspot = self.current_sunspot
                 if self.state == State.SUNBATHING:
                     self.end_sunbathing()
                 self.stop_gvf_navigation()
@@ -736,6 +743,9 @@ class BOTanicaBrain:
         elif self.soil_moisture < self.MOISTURE_LOW_THRESHOLD:
             if self.state in [State.IDLE, State.LIGHT_SCAN, State.LIGHT_ALIGN, State.LIGHT_MOVE, State.SUNBATHING, State.GO_TO_SUNSPOT]:
                 rospy.logwarn(f"Moisture low ({self.soil_moisture}%)! Going to water.")
+                # Remember where we were so we can return after dosing
+                if self.current_sunspot is not None:
+                    self.pre_interrupt_sunspot = self.current_sunspot
                 if self.state == State.SUNBATHING:
                     self.end_sunbathing()
                 self.stop_gvf_navigation()
@@ -762,6 +772,9 @@ class BOTanicaBrain:
 
         elif self.state == State.DOSING:
             self.do_dosing()
+
+        elif self.state == State.REVERSING:
+            self.do_reversing()
 
         elif self.state == State.LIGHT_SCAN:
             self.do_light_scan()
@@ -812,17 +825,7 @@ class BOTanicaBrain:
         if self.battery_percent >= self.BATTERY_FULL:
             rospy.loginfo("Fully charged! Resuming behavior.")
             self.publish_event("charge_end", {"battery_pct": self.battery_percent * 100})
-            if self.is_daytime():
-                spot = self.get_best_sunspot()
-                if spot is not None:
-                    rospy.loginfo("Returning to known sunspot after charging.")
-                    self.current_sunspot = spot
-                    self.set_state(State.GO_TO_SUNSPOT)
-                else:
-                    self.set_state(State.LIGHT_SCAN)
-                    self.reset_light_seeking()
-            else:
-                self.set_state(State.IDLE)
+            self._return_after_interrupt()
 
     def do_go_to_water(self):
         """Navigate to water station using direct proportional control"""
@@ -844,17 +847,43 @@ class BOTanicaBrain:
         elapsed = (rospy.Time.now() - self.dose_start_time).to_sec()
         rospy.loginfo_throttle(5, f"Dosing... {elapsed:.1f}/{self.DOSE_DURATION}s")
         if elapsed >= self.DOSE_DURATION:
-            rospy.loginfo("Dosing complete.")
+            rospy.loginfo("Dosing complete. Reversing away from doser...")
             self.publish_event("water_end", {"duration_s": elapsed})
+            self.set_state(State.REVERSING)
+            self.reverse_start_time = rospy.Time.now()
+
+    def _return_after_interrupt(self):
+        """Return to the sunspot we were at before dock/water interruption."""
+        if self.pre_interrupt_sunspot is not None:
+            rospy.loginfo(f"Returning to previous sunspot at {self.pre_interrupt_sunspot.get('optitrack_pos')}")
+            self.current_sunspot = self.pre_interrupt_sunspot
+            self.pre_interrupt_sunspot = None
+            self.set_state(State.GO_TO_SUNSPOT)
+            self.start_gvf_navigation(self.current_sunspot['optitrack_pos'])
+        elif self.is_daytime():
             spot = self.get_best_sunspot()
             if spot is not None:
-                rospy.loginfo("Returning to known sunspot after dosing.")
+                rospy.loginfo("Returning to best known sunspot.")
                 self.current_sunspot = spot
                 self.set_state(State.GO_TO_SUNSPOT)
+                self.start_gvf_navigation(spot['optitrack_pos'])
             else:
                 rospy.loginfo("No sunspot memory. Starting fresh light scan.")
                 self.set_state(State.LIGHT_SCAN)
                 self.reset_light_seeking()
+        else:
+            self.set_state(State.IDLE)
+
+    def do_reversing(self):
+        """Reverse away from water doser before resuming navigation."""
+        elapsed = (rospy.Time.now() - self.reverse_start_time).to_sec()
+        if elapsed < self.REVERSE_DURATION:
+            self.publish_direct_cmd(linear_x=self.REVERSE_SPEED, angular_z=0.0)
+            rospy.loginfo_throttle(1, f"Reversing... {elapsed:.1f}/{self.REVERSE_DURATION}s")
+        else:
+            self.stop()
+            rospy.loginfo("Reverse complete. Resuming behavior.")
+            self._return_after_interrupt()
 
     def end_sunbathing(self):
         """Called when leaving SUNBATHING. Accumulates duration and may promote to window."""
