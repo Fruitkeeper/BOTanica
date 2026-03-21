@@ -23,10 +23,10 @@ Usage:
     <arg name="pose_topic" default="/natnet_ros/umh_5/pose"/>
 
     <!-- Waypoint coordinates in OptiTrack "world" frame -->
-    <arg name="dock_x" default="3.156"/>
-    <arg name="dock_y" default="3.886"/>
-    <arg name="water_x" default="0.636"/>
-    <arg name="water_y" default="4.266"/>
+    <arg name="dock_x" default="0.519"/>
+    <arg name="dock_y" default="4.284"/>
+    <arg name="water_x" default="2.736"/>
+    <arg name="water_y" default="4.160"/>
 
 
     <!-- ========== OPTITRACK PUCK OFFSET ========== -->

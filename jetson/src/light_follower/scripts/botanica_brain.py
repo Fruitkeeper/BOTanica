@@ -106,15 +106,15 @@ class BOTanicaBrain:
     # Thresholds
     DEFAULT_BATTERY_LOW_THRESHOLD = 0.20   # 20% - go to dock
     DEFAULT_BATTERY_FULL = 1.0             # 100% - leave dock
-    DEFAULT_MOISTURE_LOW_THRESHOLD = 30    # 30% - go to water
+    DEFAULT_MOISTURE_LOW_THRESHOLD = 20    # 20% - go to water
 
     # Time-based day detection (24h format)
     DEFAULT_DAY_START_HOUR = 6             # 6 AM
     DEFAULT_DAY_END_HOUR = 20              # 8 PM
 
     # Default waypoints in OptiTrack frame (x, y)
-    DEFAULT_DOCK_COORDS = (0.0, 0.0)
-    DEFAULT_WATER_COORDS = (1.0, 1.0)
+    DEFAULT_DOCK_COORDS = (0.519, 4.284)
+    DEFAULT_WATER_COORDS = (2.736, 4.160)
 
     # OptiTrack frame name (must match your natnet_ros setup)
     OPTITRACK_FRAME = "world"  # OptiTrack world frame
@@ -122,6 +122,7 @@ class BOTanicaBrain:
     # Navigation parameters
     DEFAULT_ARRIVAL_TOLERANCE = 0.15       # meters - how close to be "arrived" (sunspots)
     DOCK_ARRIVAL_TOLERANCE = 0.15          # meters - dock is a square, more forgiving
+    WATER_ARRIVAL_TOLERANCE = 0.05         # meters - water doser needs precise alignment (~5cm)
 
     # Light-seeking parameters
     BRIGHTNESS_SCAN_THRESHOLD = 150
@@ -136,7 +137,7 @@ class BOTanicaBrain:
     OBSTACLE_CHECK_WIDTH = 0.3             # fraction of image width to check (center 30%)
 
     # Dosing duration
-    DEFAULT_DOSE_DURATION = 5.0            # seconds to "water"
+    DEFAULT_DOSE_DURATION = 30.0           # seconds to wait for ultrasonic doser
 
     # Sunbathing parameters
     SUNBATHING_RECHECK_INTERVAL = 5.0      # seconds between brightness checks
@@ -846,7 +847,7 @@ class BOTanicaBrain:
         # Ensure nav target is water station (guards against race with other state handlers)
         if self.nav_target is None or self.nav_target != self.WATER_COORDS:
             self.start_gvf_navigation(self.WATER_COORDS)
-        if self.distance_to_optitrack(self.WATER_COORDS) < self.DOCK_ARRIVAL_TOLERANCE:
+        if self.distance_to_optitrack(self.WATER_COORDS) < self.WATER_ARRIVAL_TOLERANCE:
             rospy.loginfo("Arrived at water station. Dosing...")
             self.publish_event("nav_arrival", {"station": "water"})
             self.stop_gvf_navigation()
