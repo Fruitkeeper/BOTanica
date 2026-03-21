@@ -686,7 +686,7 @@ class BOTanicaBrain:
         # Convert odom yaw to world frame using calibrated offset
         current_yaw = self.odom_yaw + self.yaw_offset
         heading_error = self.angle_diff(desired_yaw, current_yaw)
-        rospy.loginfo_throttle(5, f"[NAV] yaw_offset={np.degrees(self.yaw_offset):.1f}° odom_yaw={np.degrees(self.odom_yaw):.1f}° world_yaw={np.degrees(current_yaw):.1f}° desired={np.degrees(desired_yaw):.1f}°")
+        rospy.loginfo_throttle(15, f"[NAV] yaw_offset={np.degrees(self.yaw_offset):.1f}° odom_yaw={np.degrees(self.odom_yaw):.1f}° world_yaw={np.degrees(current_yaw):.1f}° desired={np.degrees(desired_yaw):.1f}°")
 
         # Proportional angular correction
         # When heading error is large (>90°), commit to turning one direction
@@ -701,7 +701,7 @@ class BOTanicaBrain:
         if abs(heading_error) > self.NAV_ALIGN_THRESHOLD:
             # Turn in place first
             self.publish_direct_cmd(linear_x=0.0, angular_z=angular_cmd)
-            rospy.loginfo_throttle(2, f"[NAV] ALIGNING dist={dist:.2f}m heading_err={np.degrees(heading_error):.1f}°")
+            rospy.loginfo_throttle(5, f"[NAV] ALIGNING dist={dist:.2f}m heading_err={np.degrees(heading_error):.1f}°")
         else:
             # Drive forward with heading correction
             # Slow down as we approach
@@ -719,7 +719,8 @@ class BOTanicaBrain:
                     speed *= 0.5
 
             self.publish_direct_cmd(linear_x=speed, angular_z=angular_cmd)
-            rospy.loginfo_throttle(2, f"[NAV] DRIVING dist={dist:.2f}m heading_err={np.degrees(heading_error):.1f}° speed={speed:.2f}")
+            pos_str = f"pos=({self.optitrack_pose[0]:.2f},{self.optitrack_pose[1]:.2f})" if self.optitrack_pose else "pos=N/A"
+            rospy.loginfo_throttle(5, f"[NAV] DRIVING {pos_str} -> ({self.nav_target[0]:.2f},{self.nav_target[1]:.2f}) dist={dist:.2f}m err={np.degrees(heading_error):.1f}° spd={speed:.2f}")
 
     def check_arrival(self):
         """Check if robot has arrived at navigation target (uses OptiTrack)"""
@@ -762,7 +763,7 @@ class BOTanicaBrain:
                 self.start_gvf_navigation(self.WATER_COORDS)
 
         # Log current state
-        rospy.loginfo_throttle(2, f"State: {self.state.value} | Nav: {self.nav_mode.value} | Battery: {self.battery_percent*100:.0f}% | Moisture: {self.soil_moisture}%")
+        rospy.loginfo_throttle(10, f"State: {self.state.value} | Nav: {self.nav_mode.value} | Battery: {self.battery_percent*100:.0f}% | Moisture: {self.soil_moisture}%")
 
         # === STATE MACHINE ===
 
@@ -860,7 +861,7 @@ class BOTanicaBrain:
     def do_dosing(self):
         self.stop()
         elapsed = (rospy.Time.now() - self.dose_start_time).to_sec()
-        rospy.loginfo_throttle(1, f"Dosing... {elapsed:.1f}/{self.DOSE_DURATION}s")
+        rospy.loginfo_throttle(5, f"Dosing... {elapsed:.1f}/{self.DOSE_DURATION}s")
         if elapsed >= self.DOSE_DURATION:
             rospy.loginfo("Dosing complete.")
             self.publish_event("water_end", {"duration_s": elapsed})
@@ -1034,9 +1035,7 @@ class BOTanicaBrain:
             return
 
         if self.scan_start_yaw is None:
-            rospy.loginfo("=" * 50)
-            rospy.loginfo("[SCAN START] Starting 360° light scan...")
-            rospy.loginfo(f"[SCAN START] initial_yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
+            rospy.loginfo(f"[SCAN START] 360° light scan, yaw={np.degrees(self.odom_yaw):.1f}°")
             self.scan_start_yaw = self.odom_yaw
             self.scan_last_yaw = self.odom_yaw
             self.scan_accumulated_rotation = 0.0
@@ -1072,10 +1071,9 @@ class BOTanicaBrain:
         target_rotation_deg = 330
         target_rotation_rad = 5.76  # 330 degrees in radians
 
-        # === DEBUG: Detailed progress log ===
         progress_pct = min(100, (self.scan_accumulated_rotation / target_rotation_rad) * 100)
-        status_msg = f"accumulated={np.degrees(self.scan_accumulated_rotation):.1f}°/{target_rotation_deg}° ({progress_pct:.0f}%) yaw={np.degrees(self.odom_yaw):.1f}° duration={scan_duration:.1f}s cmds={self._debug_cmd_count}"
-        rospy.loginfo_throttle(1, f"[SCAN] {status_msg}")
+        status_msg = f"{np.degrees(self.scan_accumulated_rotation):.0f}°/{target_rotation_deg}° ({progress_pct:.0f}%)"
+        rospy.loginfo_throttle(5, f"[SCAN] {status_msg}")
         self.debug_scan_pub.publish(String(data=status_msg))
 
         if self.scan_accumulated_rotation < target_rotation_rad or scan_duration < 6.0:
@@ -1084,13 +1082,7 @@ class BOTanicaBrain:
         else:
             # Scan complete
             self.stop()
-            rospy.loginfo("=" * 50)
-            rospy.loginfo(f"[SCAN COMPLETE] total_rotation={np.degrees(self.scan_accumulated_rotation):.1f}° duration={scan_duration:.1f}s")
-            rospy.loginfo(f"[SCAN COMPLETE] start_yaw={np.degrees(self.scan_start_yaw):.1f}° end_yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
-            rospy.loginfo(f"[SCAN COMPLETE] total_cmds={self._debug_cmd_count} samples={len(self._debug_yaw_samples)}")
-            if self._debug_scan_cmd_gaps:
-                rospy.logwarn(f"[SCAN COMPLETE] cmd_gaps>{300}ms: {len(self._debug_scan_cmd_gaps)} (max={max(self._debug_scan_cmd_gaps)*1000:.0f}ms)")
-            rospy.loginfo("=" * 50)
+            rospy.loginfo(f"[SCAN COMPLETE] rotation={np.degrees(self.scan_accumulated_rotation):.0f}° duration={scan_duration:.1f}s")
 
             bright_angles = [b for _, b in self.brightness_log if b > self.BRIGHTNESS_SCAN_THRESHOLD]
             rospy.loginfo(f"Scan complete. Bright angles: {len(bright_angles)}/{len(self.brightness_log)}")
@@ -1125,7 +1117,7 @@ class BOTanicaBrain:
             self.set_nav_mode(NavigationMode.DIRECT)
 
         error = self.angle_diff(self.target_yaw, self.odom_yaw)
-        rospy.loginfo_throttle(2, f"ALIGN: target={np.degrees(self.target_yaw):.1f}° current={np.degrees(self.odom_yaw):.1f}° error={np.degrees(error):.1f}° (odom)")
+        rospy.loginfo_throttle(5, f"ALIGN: target={np.degrees(self.target_yaw):.1f}° current={np.degrees(self.odom_yaw):.1f}° error={np.degrees(error):.1f}° (odom)")
 
         if abs(error) > 0.1:  # ~6 degrees threshold
             # Turn in the direction that reduces the error
@@ -1187,10 +1179,10 @@ class BOTanicaBrain:
             if self.should_slow_down():
                 # Slow down when approaching obstacle
                 speed = self.LIGHT_MOVE_SPEED * 0.5
-                rospy.loginfo_throttle(2, f"[MOVE] dist={dist:.2f}m obstacle={self.min_obstacle_dist:.2f}m SLOWING to {speed} m/s")
+                rospy.loginfo_throttle(5, f"[MOVE] dist={dist:.2f}m obstacle={self.min_obstacle_dist:.2f}m SLOWING to {speed} m/s")
             else:
                 speed = self.LIGHT_MOVE_SPEED
-                rospy.loginfo_throttle(2, f"[MOVE] dist={dist:.2f}m obstacle={self.min_obstacle_dist:.2f}m brightness={brightness:.0f} moving at {speed} m/s")
+                rospy.loginfo_throttle(5, f"[MOVE] dist={dist:.2f}m brightness={brightness:.0f} spd={speed} m/s")
 
             self.publish_direct_cmd(linear_x=speed)
         else:

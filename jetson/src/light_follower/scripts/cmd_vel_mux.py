@@ -99,19 +99,9 @@ class CmdVelMux:
                 timed_out = True
                 rospy.logwarn_throttle(2, "Direct cmd_vel timeout - stopping")
 
-        # === DEBUG: Track turning state ===
+        # === Track turning state ===
         is_turning = abs(cmd.angular.z) > 0.01
         was_turning = self._debug_is_turning
-
-        if is_turning and not was_turning:
-            self._debug_turn_start_time = time.time()
-            rospy.loginfo(f"[MUX TURN START] angular_z={cmd.angular.z:.3f}")
-
-        if was_turning and not is_turning:
-            if self._debug_turn_start_time:
-                duration = time.time() - self._debug_turn_start_time
-                rospy.loginfo(f"[MUX TURN END] duration={duration:.2f}s timed_out={timed_out}")
-            self._debug_turn_start_time = None
 
         if timed_out and was_turning:
             self._debug_timeout_count += 1
@@ -121,9 +111,9 @@ class CmdVelMux:
         self._debug_last_angular = cmd.angular.z
         self._debug_pub_count += 1
 
-        # === DEBUG: Periodic status ===
+        # === Periodic status ===
         now_time = time.time()
-        if now_time - self._debug_last_status_time > 2.0:
+        if now_time - self._debug_last_status_time > 30.0:
             self._debug_last_status_time = now_time
             mode_str = "GVF" if self.use_gvf else "DIRECT"
             status = f"mode={mode_str} direct_rx={self._debug_direct_count} gvf_rx={self._debug_gvf_count} pub={self._debug_pub_count} timeouts={self._debug_timeout_count}"
