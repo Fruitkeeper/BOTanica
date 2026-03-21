@@ -325,30 +325,11 @@ class BOTanicaBrain:
         _, _, yaw = euler_from_quaternion([orient.x, orient.y, orient.z, orient.w])
         self.optitrack_pose = (pos.x, pos.y, yaw)
 
-        # Estimate yaw offset between odom and world frames from movement direction
-        # The puck is offset from center of rotation, so turning in place produces
-        # false movement. Only calibrate from straight-line driving (>15cm movement)
-        # and freeze after initial calibration (the offset between frames is constant).
-        xy = (pos.x, pos.y)
-        if self._prev_optitrack_xy is not None:
-            if self.yaw_offset is None:
-                dx = xy[0] - self._prev_optitrack_xy[0]
-                dy = xy[1] - self._prev_optitrack_xy[1]
-                moved = math.hypot(dx, dy)
-                if moved > 0.15:
-                    world_bearing = math.atan2(dy, dx)
-                    # odom_yaw at midpoint of movement segment
-                    half_diff = self.angle_diff(self.odom_yaw, self._prev_odom_yaw_at_sample) / 2.0
-                    odom_yaw_mid = self._prev_odom_yaw_at_sample + half_diff
-                    self.yaw_offset = self.angle_diff(world_bearing, odom_yaw_mid)
-                    rospy.loginfo(f"[YAW OFFSET] Calibrated: {np.degrees(self.yaw_offset):.1f}° "
-                                  f"(world_bearing={np.degrees(world_bearing):.1f}° odom_mid={np.degrees(odom_yaw_mid):.1f}°)")
-                    self._prev_optitrack_xy = xy
-                    self._prev_odom_yaw_at_sample = self.odom_yaw
-            # Once calibrated, don't update — the offset is constant
-        else:
-            self._prev_optitrack_xy = xy
-            self._prev_odom_yaw_at_sample = self.odom_yaw
+        # Continuously update yaw offset using OptiTrack yaw directly
+        # world_yaw = odom_yaw + yaw_offset  =>  yaw_offset = world_yaw - odom_yaw
+        self.yaw_offset = self.angle_diff(yaw, self.odom_yaw)
+        rospy.loginfo_once(f"[YAW OFFSET] Calibrated: {np.degrees(self.yaw_offset):.1f}° "
+                           f"(optitrack_yaw={np.degrees(yaw):.1f}° odom_yaw={np.degrees(self.odom_yaw):.1f}°)")
 
     def odom_callback(self, msg):
         """Odometry from RoboMaster — used ONLY for light-seeking (scan/align/move)"""
@@ -627,7 +608,7 @@ class BOTanicaBrain:
 
         # Warn if gap is too large (potential cause of timeout on raspi)
         if gap > 0.3 and abs(angular_z) > 0.01:
-            rospy.logwarn(f"[CMD GAP] {gap*1000:.0f}ms between turn commands! cmd#{self._debug_cmd_count}")
+            rospy.logwarn_throttle(10, f"[CMD GAP] {gap*1000:.0f}ms between turn commands! cmd#{self._debug_cmd_count}")
             self._debug_scan_cmd_gaps.append(gap)
 
         twist = Twist()
@@ -913,8 +894,12 @@ class BOTanicaBrain:
 
     def do_sunbathing(self):
         """Park at a bright spot and periodically recheck brightness."""
-        # Publish stop periodically to prevent mux timeout
-        self.stop()
+        # Send stop at low rate (every 2s) to prevent mux timeout
+        # Sending every tick (10Hz) causes motor jitter from repeated drive_speed calls
+        now_float = rospy.get_time()
+        if not hasattr(self, '_sunbath_last_stop') or (now_float - self._sunbath_last_stop) >= 2.0:
+            self.stop()
+            self._sunbath_last_stop = now_float
 
         if not self.is_daytime():
             rospy.loginfo("[SUNBATHING] Night detected. Transitioning to IDLE.")
@@ -1062,7 +1047,7 @@ class BOTanicaBrain:
         if len(self._debug_yaw_samples) > 10:
             recent_deltas = [abs(s[2]) for s in self._debug_yaw_samples[-10:]]
             if all(d < 0.001 for d in recent_deltas):
-                rospy.logwarn(f"[SCAN STUCK?] Yaw hasn't changed in 10 samples! yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
+                rospy.logwarn_throttle(5, f"[SCAN STUCK?] Yaw hasn't changed in 10 samples! yaw={np.degrees(self.odom_yaw):.1f}° (odom)")
 
         self.scan_last_yaw = self.odom_yaw
 
