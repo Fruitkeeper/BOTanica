@@ -1094,18 +1094,10 @@ class BOTanicaBrain:
                 "duration_s": scan_duration,
             })
 
-            if len(bright_angles) >= self.MIN_BRIGHT_ANGLES:
-                rospy.loginfo("Environment is well-lit. Saving sunspot and entering SUNBATHING.")
-                self.save_sunspot()
-                self.set_state(State.SUNBATHING)
-                self.sunbathing_last_check = None
-                self.sunbathing_drop_counter = 0
-                self.reset_light_seeking()
-                return
-
             if self.brightness_log:
-                self.target_yaw = max(self.brightness_log, key=lambda x: x[1])[0]
-                rospy.loginfo(f"Brightest direction: {np.degrees(self.target_yaw):.1f}°")
+                best_yaw, best_brightness = max(self.brightness_log, key=lambda x: x[1])
+                rospy.loginfo(f"Brightest direction: {np.degrees(best_yaw):.1f}° (brightness={best_brightness:.0f})")
+                self.target_yaw = best_yaw
                 self.set_state(State.LIGHT_ALIGN)
             else:
                 rospy.logwarn("No brightness data. Rescanning.")
