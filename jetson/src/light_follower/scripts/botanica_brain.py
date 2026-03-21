@@ -131,6 +131,7 @@ class BOTanicaBrain:
     MIN_BRIGHT_ANGLES = 5
     LIGHT_MOVE_SPEED = 0.1
     BRIGHT_CONFIRM_COUNT = 3
+    MIN_MOVE_BEFORE_PARK = 0.20            # meters - must move at least 20cm before parking at sunspot
 
     # Obstacle avoidance parameters
     OBSTACLE_STOP_DISTANCE = 0.25          # meters - stop if obstacle closer than this
@@ -145,7 +146,7 @@ class BOTanicaBrain:
     # Sunbathing parameters
     SUNBATHING_RECHECK_INTERVAL = 5.0      # seconds between brightness checks
     SUNBATHING_DROP_THRESHOLD = 100        # brightness below this = "light dropped"
-    SUNBATHING_DROP_COUNT = 3              # consecutive low checks before rescanning
+    SUNBATHING_DROP_COUNT = 6              # consecutive low checks before rescanning
     MAX_SUNSPOTS = 5                       # max remembered positions
     SUNSPOT_ARRIVAL_BRIGHTNESS = 130       # min brightness to confirm sunspot is still good
 
@@ -821,7 +822,8 @@ class BOTanicaBrain:
             self.navigate_to_target()
 
     def do_charging(self):
-        self.stop()
+        # Don't send any velocity commands — the driver's safety timeout
+        # locks the wheels via drive_wheels(0,0,0,0) when no commands arrive.
         if self.battery_percent >= self.BATTERY_FULL:
             rospy.loginfo("Fully charged! Resuming behavior.")
             self.publish_event("charge_end", {"battery_pct": self.battery_percent * 100})
@@ -843,7 +845,8 @@ class BOTanicaBrain:
             self.navigate_to_target()
 
     def do_dosing(self):
-        self.stop()
+        # Don't send any velocity commands — the driver's safety timeout
+        # locks the wheels via drive_wheels(0,0,0,0) when no commands arrive.
         elapsed = (rospy.Time.now() - self.dose_start_time).to_sec()
         rospy.loginfo_throttle(5, f"Dosing... {elapsed:.1f}/{self.DOSE_DURATION}s")
         if elapsed >= self.DOSE_DURATION:
@@ -923,12 +926,8 @@ class BOTanicaBrain:
 
     def do_sunbathing(self):
         """Park at a bright spot and periodically recheck brightness."""
-        # Send stop at low rate (every 2s) to prevent mux timeout
-        # Sending every tick (10Hz) causes motor jitter from repeated drive_speed calls
-        now_float = rospy.get_time()
-        if not hasattr(self, '_sunbath_last_stop') or (now_float - self._sunbath_last_stop) >= 2.0:
-            self.stop()
-            self._sunbath_last_stop = now_float
+        # Don't send any velocity commands — the driver's safety timeout
+        # locks the wheels via drive_wheels(0,0,0,0) when no commands arrive.
 
         if not self.is_daytime():
             rospy.loginfo("[SUNBATHING] Night detected. Transitioning to IDLE.")
@@ -1155,11 +1154,11 @@ class BOTanicaBrain:
 
         brightness = self.get_brightness()
 
-        # Check if sustained brightness
-        if brightness > self.BRIGHTNESS_MOVE_THRESHOLD:
+        # Check if sustained brightness (only after moving a minimum distance)
+        if brightness > self.BRIGHTNESS_MOVE_THRESHOLD and dist >= self.MIN_MOVE_BEFORE_PARK:
             self.bright_counter += 1
             if self.bright_counter >= self.BRIGHT_CONFIRM_COUNT:
-                rospy.loginfo("Found bright area. Saving sunspot and entering SUNBATHING.")
+                rospy.loginfo(f"Found bright area at dist={dist:.2f}m. Saving sunspot and entering SUNBATHING.")
                 self.stop()
                 self.save_sunspot()
                 self.set_state(State.SUNBATHING)
