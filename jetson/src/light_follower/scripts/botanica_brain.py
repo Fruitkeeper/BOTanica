@@ -122,7 +122,7 @@ class BOTanicaBrain:
     # Navigation parameters
     DEFAULT_ARRIVAL_TOLERANCE = 0.15       # meters - how close to be "arrived" (sunspots)
     DOCK_ARRIVAL_TOLERANCE = 0.15          # meters - dock is a square, more forgiving
-    WATER_ARRIVAL_TOLERANCE = 0.05         # meters - water doser needs precise alignment (~5cm)
+    WATER_ARRIVAL_TOLERANCE = 0.15         # meters - close enough for ultrasonic doser to detect
 
     # Light-seeking parameters
     BRIGHTNESS_SCAN_THRESHOLD = 150
