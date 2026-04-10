@@ -1,83 +1,139 @@
-# **BOTanica**  
-*An autonomous plant-inspired cyborg integrates ROS, BLE sensors, a RealSense camera, and DJI hardware, with blockchain ensuring traceable and decentralized control of its actions.*
+# BOTanica
 
----   
+*An autonomous plant-inspired robot that seeks light, monitors its own environmental sensors, and navigates back to a charging dock when its battery runs low.*
 
-## **Repository Structure**  
-```plaintext
-📦 BOTanica
-┣ 📂 jetson/                    # Jetson Nano/Xavier components (ROS Melodic)
-┃ ┣ 📂 sensor_publisher/        # BLE sensor data publisher 
-┃ ┃ ┣ 📂 scripts/               # ROS nodes (e.g., sensorInfo.py)
-┃ ┃ ┣ 📂 msg/                   # Custom message definitions
-┃ ┃ ┗ 📂 launch/                # Launch files for sensor system
-┃ ┗ 📂 light_follower/          # Light path planning package
-┃   ┗ 📂 scripts/               # Path planning nodes (e.g., LP.py)
-┣ 📂 raspi-code/                # Raspberry Pi components (ROS Noetic)
-┃ ┣ 📂 src/                     # Driver and control nodes
-┃ ┗ 📂 launch/                  # Launch files for robot control
-┣ 📜 sensorInfo.py              # Legacy sensor script
-┣ 📜 light-to-movement.py       # Movement control logic
-┗ 📜 README.md                  # Project documentation
+---
+
+## Two-Device Architecture
+
+**BOTanica is a distributed system that runs on two physically separate computers** mounted on the robot. They are connected over the local network and communicate exclusively through ROS topics.
+
+| Device | Role | ROS Distro | Code Lives In |
+|---|---|---|---|
+| **Raspberry Pi** | Low-level robot driver. Runs `roscore`. Talks to the DJI RoboMaster chassis over USB and exposes it as standard ROS topics (`/cmd_vel`, `/odom`, IMU). | Noetic | `raspi/` |
+| **NVIDIA Jetson** | High-level "brain". Runs the state machine, sensor fusion, light-seeking behavior, GVF dock navigation, and battery/moisture monitoring. Subscribes to the Pi's topics and publishes velocity commands back. | Melodic | `jetson/` |
+
+The two devices are **not interchangeable** — each runs its own catkin workspace with its own packages, and the code in `raspi/` will not run on the Jetson (and vice versa). The Jetson is configured to use the Pi as its ROS master via `ROS_MASTER_URI`.
+
+```
+   ┌──────────────────┐  ROS topics over LAN   ┌─────────────────────┐
+   │   Raspberry Pi   │ ─────────────────────► │       Jetson        │
+   │  (ROS Noetic)    │   /odom, /imu, ...     │   (ROS Melodic)     │
+   │                  │ ◄───────────────────── │                     │
+   │  roscore         │       /cmd_vel         │  botanica_brain     │
+   │  robomaster_     │                        │  sensor_publisher   │
+   │  driver_node     │                        │  cmd_vel_mux        │
+   └──────────────────┘                        └─────────────────────┘
+          │                                               │
+          ▼                                               ▼
+   DJI RoboMaster                              RealSense camera,
+   chassis (USB)                               BLE sensors, OptiTrack
 ```
 
 ---
 
-## **System Architecture**  
-**BOTanica** operates on a **distributed ROS architecture**:  
-- **Raspberry Pi** (ROS Noetic): Runs `roscore` and robot drivers  
-- **Jetson** (ROS Melodic): Handles sensor data and AI processing  
+## Repository Layout
+
+```
+BOTanica/
+├── jetson/                              # Runs on the Jetson (ROS Melodic)
+│   ├── setup_ros_network.sh
+│   └── src/
+│       ├── light_follower/              # High-level brain package
+│       │   ├── config/gvf_params.yaml   # GVF dock-navigation parameters
+│       │   ├── launch/
+│       │   │   ├── botanica_brain.launch
+│       │   │   └── experiment.launch
+│       │   ├── scripts/
+│       │   │   ├── botanica_brain.py    # Main state machine
+│       │   │   ├── cmd_vel_mux.py       # Multiplexes /cmd_vel sources
+│       │   │   ├── experiment_logger.py
+│       │   │   ├── light.py
+│       │   │   ├── LP.py
+│       │   │   └── pathPlanningLight.py
+│       │   └── tests/test_botanica_brain.py
+│       ├── sensor_publisher/            # BLE sensor → ROS bridge
+│       │   ├── msg/SensorData.msg
+│       │   ├── launch/sensor_system.launch
+│       │   └── scripts/sensorInfo.py
+│       └── librealsense/                # Vendored RealSense SDK
+│
+├── raspi/                               # Runs on the Raspberry Pi (ROS Noetic)
+│   ├── setup_ros_network.sh
+│   └── src/robomaster_driver/
+│       ├── launch/
+│       │   ├── robomaster_driver.launch
+│       │   └── teleop.launch
+│       ├── rviz/robomaster.rviz
+│       └── src/
+│           ├── robomaster_driver_node.py   # Live driver node
+│           └── driver_OG.py                # Legacy reference
+│
+├── code/                                # Standalone scripts and prototypes
+│   ├── Arduino code                     # Arduino sketch (charging dock?)
+│   └── static_gvf_field.py
+│
+├── light-to-movement.py                 # Standalone light-tracking prototype
+└── README.md
+```
 
 ---
 
-## **Key Features**  
-- **Distributed Computing**:  
-  - Pi manages motor control and system coordination  
-  - Jetson handles sensor fusion and path planning  
-- **Real-time Sensor Data**:  
-  - BLE sensors publish light, temperature, and soil metrics  
-- **Adaptive Navigation**:  
-  - AI-driven light-seeking behavior with camera integration  
+## Quick Start
 
----
-
-## **Quick Start**  
-
-### **1. Raspberry Pi Setup**  
+### On the Raspberry Pi
 ```bash
-# Start ROS core
+# Start the ROS master
 roscore
 
-# Run robot driver
+# In a second shell, launch the RoboMaster driver
+cd ~/BOTanica/raspi
+source devel/setup.bash
 roslaunch robomaster_driver robomaster_driver.launch
 ```
 
-### **2. Jetson Setup**  
+### On the Jetson
 ```bash
-# Set ROS master to Pi's IP
+# Point ROS at the Pi
 export ROS_MASTER_URI=http://<PI_IP>:11311
+export ROS_IP=<JETSON_IP>
 
-# Launch sensor publisher
+cd ~/BOTanica/jetson
+source devel/setup.bash
+
+# Start the BLE sensor publisher
 roslaunch sensor_publisher sensor_system.launch
 
-# Run light path planner
-rosrun light_follower LP.py
+# Start the brain
+roslaunch light_follower botanica_brain.launch
+```
+
+The helper scripts `jetson/setup_ros_network.sh` and `raspi/setup_ros_network.sh` set the appropriate `ROS_MASTER_URI` / `ROS_IP` environment variables for each device.
+
+---
+
+## Behaviors
+
+The brain (`botanica_brain.py`) is a priority-based state machine:
+
+1. **Battery low** → navigate to dock via GVF (OptiTrack frame), then charge.
+2. **Soil moisture low** → navigate to the watering station.
+3. **Otherwise** → light-seeking: scan, identify the brightest direction, move toward it (odometry frame).
+
+State transitions, scans, and dock arrivals are published as events through `experiment_logger.py` for offline analysis.
+
+---
+
+## Useful Topics
+
+```bash
+rostopic echo /sensor_data                # BLE sensor readings
+rostopic echo /battery_level              # Battery state
+rostopic echo /cmd_vel                    # Final velocity sent to chassis
+rostopic echo /camera/color/image_raw     # RealSense color stream
 ```
 
 ---
 
-## **Usage**  
-### **Monitor Sensor Data**:  
-```bash
-rostopic echo /sensor_data
-```
-
-### **View Camera Feed**:  
-```bash
-rostopic echo /camera/color/image_raw
-```
-
----
-
-## **License**  
+## License
 Apache 2.0. See [LICENSE](LICENSE).
